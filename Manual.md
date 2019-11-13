@@ -28,45 +28,51 @@
   - [Set a target FPS for applications](#set-a-target-fps-for-applications)
   - [Never store pointers to components](#never-store-pointers-to-components)
 - [Entities](#entities)
-  - [Entity lifecycle](#entity-lifecycle)
+  - [Entity basics](#entity-basics)
     - [Creating entities](#creating-entities)
     - [Create entities in bulk](#create-entities-in-bulk)
     - [Deleting entities](#deleting-entities)
-  - [Containers](#containers)
-    - [The EcsContainer tag](#the-ecscontainer-tag)
+  - [Hierarchies](#hierarchies)
     - [Creating child entities](#creating-child-entities)
     - [Adopting entities](#adopting-entities)
     - [Orphaning entities](#orphaning-entities)
-- [Components and Types](#components-and-types)
-  - [Owned components](#owned-components)
-    - [Add components](#add-components)
-    - [Remove components](#remove-components)
-    - [Set components](#set-components)
-  - [Shared components](#shared-components)
+    - [Hierarchies and types](#hierarchies-and-types)
+  - [Inheritance](#inheritance)
+    - [Creating instances](#creating-instances)
+    - [Adding inheritance relationships](#adding-inheritance-relationships)
+    - [Removing inheritance relationships](#adding-inheritance-relationships)
+    - [Inheritance and types](#inheritance-and-types)
+    - [Multiple inheritance](#multiple-inheritance)
+    - [Overriding components](#overriding-components)
+    - [Specialization](#Specialization)
     - [Prefabs](#prefabs)
-      - [Overriding prefab components](#overriding-prefab-components)
-      - [Prefabs and types](#prefabs-and-types)
-      - [Nested prefabs](#nested-prefabs)
+    - [Prefab nesting](#prefab-nesting)
+- [Components and Types](#components-and-types)
+  - [Add components](#add-components)
+  - [Remove components](#remove-components)
+  - [Set components](#set-components)
+  - [Tags](#tags)
+  - [Builtin components](#builtin-components)
 - [Systems](#systems)
-   - [System queries](#system-queries)
+   - [System signatures](#system-signatures)
      - [Column operators](#column-operators)
        - [OR operator](#or-operator)
        - [NOT operator](#not-operator)
        - [Optional operator](#optional-operator)
      - [Column source modifiers](#column-source-modifiers)
-       - [SELF modifier](#id-modifier)
-       - [ID modifier](#id-modifier)
-       - [CONTAINER modifier](#container-modifier)
-       - [SYSTEM modifier](#system-modifier)
-       - [SINGLETON modifier](#singleton-modifier)
-       - [ENTITY modifier](#entity-modifier)
+       - [SELF source](#self-source)
+       - [OWNED source](#owned-source)
+       - [SHARED source](#shared-source)
+       - [NOTHING source](#nothing-source)
+       - [CONTAINER source](#container-source)
+       - [CASCADE source](#cascade-source)
+       - [SYSTEM source](#system-source)
+       - [SINGLETON source](#singleton-source)
+       - [ENTITY source](#entity-source)
    - [System API](#system-api)
      - [The ECS_COLUMN macro](#the-ecs_column-macro)
-     - [The ECS_SHARED macro](#the-ecs_shared-macro)
      - [The ECS_COLUMN_COMPONENT macro](#the-ecs_column_component-macro)
      - [The ECS_COLUMN_ENTITY macro](#the-ecs_column_entity-macro)
-     - [The ecs_field function](#the-ecs_field-function)
-     - [The ECS_COLUMN_TEST and ECS_SHARED_TEST macro's](#the-ecs_column_test-and-ecs_shared_test-macros)
    - [System phases](#system-phases)
      - [The EcsOnLoad phase](#the-ecsonload-phase)
      - [The EcsPostLoad phase](#the-ecspostload-phase)
@@ -81,9 +87,28 @@
      - [EcsOnAdd event](#ecsonadd-event)
      - [EcsOnRemove event](#ecsonremove-event)
      - [EcsOnSet event](#ecsonset-event)
-     - [Custom reactive systems](#custom-reactive-systems)
    - [Features](#features)
-   
+- [Staging](#staging)
+  - [Staged vs. inline modifications](#staged-vs-inline-modifications)
+  - [Staging and ecs_get_ptr](#staging-and-ecs_get_ptr)
+  - [Overwriting the stage](#overwriting-the-stage)
+  - [Staging and EcsOnAdd, EcsOnSet and EcsOnRemove](#staging-and-ecsonadd-ecsonset-and-ecsonremove)
+  - [Staging and system phases](#staging-and-system-phases)
+  - [Staging and threading](#staging-and-threading)
+  - [Manually merging stages](#manually-merging-stages)
+  - [Limitations of staging](#limitations-of-staging)
+- [Modules](#modules)
+  - [Importing modules](#importing-modules)
+    - [Module content handles](#module-content-handles)
+    - [Dynamic imports](#dynamic-imports)
+  - [Creating modules](#creating-modules)
+- [Internals](#internals)
+  - [Archetypes](#archetypes)
+  - [System internals](#system-internals)
+  - [Type internals](#type-internals)
+  - [Entity internals](#entity-internals)
+- [Operating system abstraction API](#operating-system-abstraction-api)
+
 ## Design Goals
 Flecs is designed with the following goals in mind, in order of importance:
 
@@ -98,10 +123,8 @@ To further improve reusability, Flecs allows for writing code that is agnostic t
 ### Clean interfaces
 Flecs aims to provide clear and simple interfaces, by staying close to the core principles of Entity Component Systems. Someone who has worked with Entity Component Systems before should find it easy to read and write code written with Flecs. Flecs promotes a declarative design, where applications only need to state their intent.
 
-Many Entity Component System frameworks put restrictions on the operations that can be performed while iterating over data, which makes APIs harder to use. In Flecs, there are no restrictions on which operations can be used.
-
 ### Performance
-Flecs has a design that is optimized for minimizing cache misses by loading only data in cache that is required by the application, while also storing data in arrays (AoS) to ensure that an application makes optimal usage of cache lines. In many cases, applications can access raw arrays directly, wich is as fast as iterating a native array in C and, if the code permits it, lets applications be compiled with Single Instruction, Multiple Data (SIMD) instructions.
+Flecs has a design that is optimized for minimizing cache misses by loading only data in cache that is required by the application, while also storing data in arrays (SoA) to ensure that an application makes optimal usage of cache lines. In many cases, applications can access raw arrays directly, wich is as fast as iterating a native array in C and, if the code permits it, lets applications be compiled with Single Instruction, Multiple Data (SIMD) instructions.
 
 Furthermore, Flecs automatically optimizes performance where it can, by removing systems from the critical path if they are unused. This further improves reusability of code, as it lets applications import modules of which only a subset of the systems is used, without increasing overhead of the framework.
 
@@ -124,9 +147,9 @@ typedef struct Velocity {
 
 // System names ('Move') use CamelCase. Supporting API types use snake_case_t
 void Move(ecs_rows_t *rows) {
-    // API functions ('ecs_column') use snake_case
-    Position *p = ecs_column(rows, Position, 1);
-    Velocity *v = ecs_column(rows, Velocity, 2);
+    // Declarative macro's use SCREAMING_SNAKE_CASE
+    ECS_COLUMN(rows, Position, p, 1);
+    ECS_COLUMN(rows, Velocity, v, 2);
     
     for (int i = 0; i < rows->count; i ++) {
         p[i].x += v[i].x;
@@ -135,6 +158,7 @@ void Move(ecs_rows_t *rows) {
 }
 
 int main(int argc, char *argv[]) {
+    // Functions use snake_case
     ecs_world_t *world = ecs_init();
     
     // Declarative macro's use SCREAMING_SNAKE_CASE
@@ -148,34 +172,36 @@ int main(int argc, char *argv[]) {
     ECS_ENTITY(world, MyEntity, Position, Velocity);
     
     // Imperative macro's (function wrappers) use snake_case
-    ecs_set(world, MyEntity, Position, {10, 20});
+    ecs_add(world, MyEntity, Position);
     
     return ecs_fini(world);
 }
 ```
 
+Flecs symbols and macro's use the `ecs_`, `ECS_` and `Ecs` prefixes.
+
 #### Handles
-The Flecs API creates and uses handles (integers) to refer to entities, systems and components. Most of the times these handles are transparently created and used by the API, and most code can be written without explicitly being aware of how they are managed. However, in some cases the API may need to access the handles directly, in which case it is useful to know their conventions.
+The API creates and uses handles to refer to entities, systems and components. Most of the times these handles are transparently created and used by the API, and most code can be written without explicitly being aware of how they are managed. However, in some cases the API may need to access the handles directly, in which case it is useful to know their conventions.
 
-The Flecs API has entity handles (of type `ecs_entity_t`) and type handles (of type `ecs_type_t`). Entity handles are used to refer to a single entity. Systems and components (amongst others) obtain identifiers from the same id pool as entities, thus handles to systems and components are also of type `ecs_entity_t`. Types are identifiers that uniquely identify a set of entities (or systems, components). Types are commonly used to add/remove one or more components to/from an entity, or enable/disable one or more systems at once.
+The API has entity handles (of type `ecs_entity_t`) and type handles (of type `ecs_type_t`). Entity handles are used to refer to a single entity. Systems and components (amongst others) obtain identifiers from the same id pool as entities, thus handles to systems and components are also of type `ecs_entity_t`. Types are vectors of entity identifiers that are used to describe which components an entity has (components are identified by entity identifiers), amongst others.
 
-Type handles are automatically created by API macro's like `ECS_COMPONENT`, `ECS_TYPE` and `ECS_PREFAB`. To obtain a handle to a type, use the `ecs_to_type` macro and provide as argument the identifier of the component or entity. Entity handles in most cases have the same identifier that is provided to the macro. For example:
+Type handles are automatically created by API macro's like `ECS_COMPONENT`, `ECS_TYPE` and `ECS_PREFAB`. To obtain a handle to a type, use the `ecs_type` macro and provide as argument the identifier of the component or entity. Entity handles in most cases have the same identifier that is provided to the macro. For example:
 
 ```c
 ECS_TYPE(world, MyType, Position);
 ```
 
-This statement makes the entity handle available as `MyType`. To access the type handle directly, use `ecs_to_type(MyType)`. There is one exception to this rule, which is components. Entity handles of components are prefixed, so that the names do not collide with the component type name. To obtain the entity handle of a component, use the `ecs_to_entity` function. For example:
+This statement makes the entity handle available as `MyType`. To access the type handle directly, use `ecs_type(MyType)`. There is one exception to this rule, which is components. Entity handles of components are prefixed, so that the names do not collide with the component type name. To obtain the entity handle of a component, use the `ecs_entity` macro. For example:
 
 ```c
 ECS_COMPONENT(world, Position);
 ```
 
-This statement makes the entity handle available as `ecs_entity_of(Position)`, and the type handle as `ecs_type_of(Position)`, where `ecs_entity_of` and `ecs_type_of` again are the macro's that translate from the component type name to the respective entity and type handles. If one were to fully write out what the `ECS_COMPONENT` macro does, it would look like this (replace 'Type' with a C type):
+This statement makes the entity handle available as `ecs_entity(Position)`, and the type handle as `ecs_type(Position)`, where `ecs_entity` and `ecs_type` again are the macro's that translate from the component type name to the respective entity and type handles. If one were to fully write out what the `ECS_COMPONENT` macro does, it would look like this (replace 'Type' with a C type):
 
 ```c
-ecs_entity_t ecs_to_entity(Type) = ecs_new_component(world, "Type", sizeof(Type));
-ecs_type_t ecs_to_type(Type) = ecs_type_from_entity(ecs_to_entity(Type));
+ecs_entity_t ecs_entity(Type) = ecs_new_component(world, "Type", sizeof(Type));
+ecs_type_t ecs_type(Type) = ecs_type_from_entity(ecs_entity(Type));
 ```
 
 The `ecs_type_from_entity` function is an API function that can obtain a type handle from any entity handle.
@@ -234,7 +260,7 @@ ecs_set(world, e, EcsId, {"MyEntity"});
 This sets the `EcsId` component on an entity which is used by Flecs to assign names to entities. The `"MyEntity"` string is a literal and will certainly outlive the lifespan of the component, as it is tied to the lifecycle of the process, therefore it is safe to assign it like this. It can subsequently be obtained with this function:
 
 ```c
-const char *id = ecs_id(world, e);
+const char *id = ecs_get_id(world, e);
 ```
 
 This function returns the verbatim address that is stored in the `EcsId` component, and thus should not be freed.
@@ -242,21 +268,23 @@ This function returns the verbatim address that is stored in the `EcsId` compone
 If memory is tied to the lifecycle of a component, applications can use `OnAdd` and `OnRemove` components to initialize and free the memory when components are added/removed. This example shows how to create two systems for a dynamic buffer that automatically allocate/free the memory for the dynamic buffer when it is added to an entity:
 
 ```c
-typedef ecs_array_t *DynamicBuffer;
+typedef ecs_vector_t *DynamicBuffer;
 
-ecs_array_params_t params = {.element_size = sizeof(int)};
+ecs_vector_params_t params = {.element_size = sizeof(int)};
 
 void InitDynamicBuffer(ecs_rows_t *rows) {
-    DynamicBuffer *data = ecs_column(rows, DynamicBuffer, 1);
+    ECS_COLUMN(rows, DynamicBuffer, data, 1);
+    
     for (int i = rows->begin; i < rows->end; i ++) {
-        data[i] = ecs_array_new(&params, 0);
+        data[i] = ecs_vector_new(&params, 0);
     }
 }
 
 void DeinitDynamicBuffer(ecs_rows_t *rows) {
-    DynamicBuffer *data = ecs_column(rows, DynamicBuffer, 1);
+    ECS_COLUMN(rows, DynamicBuffer, data, 1);
+    
     for (int i = rows->begin; i < rows->end; i ++) {
-        ecs_array_free(data[i]);
+        ecs_vector_free(data[i]);
     }
 }
 
@@ -323,10 +351,10 @@ You may find that certain things cannot be expressed through declarative stateme
 It is much more efficient to [create entities in bulk](#create-entities-in-bulk) (using the `ecs_new_w_count` function) than it is to create entities individually. When entities are created in bulk, memory for N entities is reserved in one operation, which is much faster than repeatedly calling `ecs_new`. What can provide an even bigger performance boost is that when entities are created in bulk with an initial set of components, the `EcsOnAdd` handler for initializing those components is called with an array that contains the new entities vs. for each entity individually. If your application heavily relies on `EcsOnAdd` systems to initialize data, bulk creation is the way to go!
 
 ### Limit usage of ecs_lookup
-You can use `ecs_lookup` to find entities, components and systems that are named (that have the `EcsId` component). This operation is however not cheap, and you will want to limit the amount of times you call it in the main loop, and preferably avoid it alltogether. A better alternative to `ecs_lookup` is to specify entities in your system expression with the `ID` modifier, like so:
+You can use `ecs_lookup` to find entities, components and systems that are named (that have the `EcsId` component). This operation is however not cheap, and you will want to limit the amount of times you call it in the main loop, and preferably avoid it alltogether. A better alternative to `ecs_lookup` is to specify entities in your system expression with the `NOTHING` modifier, like so:
 
 ```c
-ECS_SYSTEM(world, MySystem, EcsOnUpdate, Position, ID.MyEntity);
+ECS_SYSTEM(world, MySystem, EcsOnUpdate, Position, .MyEntity);
 ```
 
 This will lookup the entity in advance, instead of every time the system is invoked. Obtaining the entity from within the system can be done with the `ecs_column_entity` function.
@@ -356,7 +384,7 @@ The "component" is, unexpectedly, of the `ecs_entity_t` type, and this looks wei
 
 The next sections describe how applications can use Flecs to work with entities.
 
-### Entity lifecycle
+### Entity basics
 Entities in Flecs do not have an explicit lifecycle. This may seem confusing when you come from an OOP background, or perhaps even if you worked with other ECS Frameworks. An entity in Flecs is just an integer, nothing more. You can pick any integer you want as your entity identifier, and start assigning components to it. You cannot "create" or "delete" an entity, in the same way you cannot create or delete the number 10. That means in code, you can run this line by itself and it works:
 
 ```c
@@ -405,7 +433,7 @@ ecs_delete(world, e); // empty entity
 ecs_add(world, e, Position); // add Position to empty entity
 ```
 
-### Containers
+### Hierarchies
 Flecs allows applications to create entities that are organized in hierarchies, or more accurately, directed acyclic graphs (DAG). This feature can be used, for example, when transforming entity coordinates to world space. An application can create a parent entity with child entities that specify their position relative to their parent. When transforming coordinates to world space, the transformation matrix can then be cascadingly applied from parents to children, according to the hierarchy.
 
 This is just one application of using entity hierarchies. The `flecs.components.http` and `flecs.systems.civetweb` modules both rely on the usage of parent-child relationships to express a web server (parent) with endpoints (children). Other APIs that feature hierarchical designs can benefit from this feature, like DDS (with `DomainParticipant` -> `Publisher` -> `DataWriter`) or UI development (`Window` -> `Group` -> `Button` -> `Label`). 
@@ -414,66 +442,15 @@ The container API in Flecs is fully composed out of existing (public) API functi
 
 The next sections describe how to work with containers.
 
-#### The EcsContainer tag
-In Flecs, containers are marked with the `EcsContainer` tag. This is a builtin tag that provides a quick way to test whether an entity can have child entities or not. The `EcsContainer` tag is automatically added to an entity when it _adopts_ another entity. If an application wants to know whether an entity is a container, it can simply do:
-
-```c
-if (ecs_has(world, e, EcsContainer)) {
-    // ...
-}
-```
-
-Flecs does not treat entities with the `EcsContainer` component differently from other entities. The only reason the `EcsContainer` tag is added by the API, is to provide a mechanism to discriminate between containers and non-containers. This prevents applications from having to assume that _every_ entity is a container, which could result in unnecessary operations that attempt to iterate over a set of children that does not exist.
-
-The `EcsContainer` component can be used in system queries to obtain various subsets of entities that are useful when working with containers. For example, the following system iterates over all container entities:
-
-```c
-ECS_SYSTEM(world, IterateContainers, EcsOnUpdate, EcsContainer);
-```
-
-A more common example is to find all the root entities. This is often the first step for applications that want to cascadingly iterate over entities. A system that only wants to iterate over roots can use this query:
-
-```c
-ECS_SYSTEM(world, IterateRoots, EcsOnUpdate, !CONTAINER.EcsContainer);
-```
-
-To only iterate over entities that are children of a specific entity, an application can create a manual system and provide the container as a filter to the function. For example, it can define the following system:
-
-```c
-ECS_SYSTEM(world, IterateChildren, EcsManual, CONTAINER.EcsContainer);
-```
-
-Now an application can only iterate over the children for a specific container by using the container as filter:
-
-```c
-ecs_run_w_filter(
-  world, 
-  IterateChildren, // System handle
-  delta_time,      // delta time
-  0,               // Offset
-  0,               // Limit
-  my_container,    // Filter (ecs_type_t)
-  NULL             // Parameter (void*)
-);
-```
-
-Note that the system query explicitly only accepts entities that have containers. While the filter would automatically filter out any entities that are not contained by the specified container entity, putting this in the query makes sure that the system only iterates over contained entities, while excluding root entities from the set of filtered entities in advance. This limits the number of entities (or rather, archetypes) to iterate over when filtering which can improve performance, especially if the operation is executed many times per iteration.
-
 #### Creating child entities
-Flecs offers an API to create a new entity which also specifies a parent entity. The API can be invoked like this:
+Flecs has an API to create a new entity which also specifies a parent entity. The API can be invoked like this:
 
 ```c
 ecs_entity_t my_root = ecs_new(world, 0);
 ecs_entity_t my_child = ecs_new_child(world, my_root, 0);
 ```
 
-Any entity can be specifed as a parent entity (`my_root`, in this example). After the `ecs_new_child` operation the `my_root` entity will have the `EcsContainer` tag, so this statement:
-
-```c
-ecs_has(world, my_root, EcsContainer);
-```
-
-will return true.
+Any entity can be specifed as a parent entity (`my_root`, in this example).
 
 #### Adopting entities
 The API allows applications to adopt entities by containers after they have been created with the `ecs_adopt` operation. The `ecs_adopt` operation is almost equivalent to an `ecs_add`, with as only difference that it accepts an `ecs_entity_t` (instead of an `ecs_type_t`), and it adds the `EcsContainer` component to the parent if it didn't have it already. The operation can be used like this:
@@ -484,7 +461,7 @@ ecs_entity_t e = ecs_new(world, 0);
 ecs_adopt(world, e, my_root);
 ```
 
-After this operation, the `my_root` entity will have the `EcsContainer` tag. If the entity was already a child of the container, the operation has no side effects.
+If the entity was already a child of the container, the operation has no side effects.
 
 #### Orphaning entities
 The API allows applications to orphan entities from containers after they have been created with the `ecs_orphan` operation. The `ecs_orphan` operation is almost equivalent to an `ecs_remove`, with as only difference that it accepts an `ecs_entity_t` (instead of an `ecs_type_t`). The operation can be used like this:
@@ -495,8 +472,267 @@ ecs_orphan(world, e, my_root);
 
 If the entity was not a child of the container, the operation has no side effects. This operation will not add the `EcsContainer` tag to `my_root`.
 
+#### Hierarchies and types
+Parent-child relationships are encoded in entity types using the `CHILDOF` entity flag. It is possible to create a type that describes what the parent will be of an entity created with that type. Consider the following example:
+
+```c
+ECS_ENTITY(world, MyParent, Position);
+ECS_TYPE(world, MyType, CHILDOF | MyParent, Position);
+
+// This entity will be a child of MyParent
+ecs_entity_t MyChild = ecs_new(world, MyType);
+```
+
+Alternatively, the `CHILDOF` entity flag can also be specified directly into the ECS_ENTITY macro:
+
+```c
+ECS_ENTITY(world, MyParent, Position);
+ECS_ENTITY(world, MyChild, CHILDOF | MyParent, Position);
+```
+
+Note that in order to be able to use entity flags, the parent entity must be named (it must have an `EcsId` component). When not considering the entity identifiers, the above examples are equivalent to:
+
+```c
+ecs_entity_t MyParent = ecs_new(world, Position);
+ecs_entity_t MyChild = ecs_new_child(world, MyParent, Position);
+```
+
+### Inheritance
+Inheritance is a mechanism in flecs that allows entities to "inherit", or share components from another entity. Inherited components will appear as if they are added to an entity, even though they are actually part of another entity. Inheritance relationships can be specified at creation time, or it can be added / removed at a later point in time. An entity may inherit from multiple other entities at the same time.
+
+The entity that inherits components is called the "instance". The entity from which the components are inherited is called the "base" entity.
+
+#### Creating instances
+Flecs has an API to create a new entity which also specifies a base entity. The API can be invoked like this:
+
+```c
+ecs_entity_t my_base = ecs_new(world, Position);
+ecs_entity_t my_instance = ecs_new_instance(world, my_base, Velocity);
+```
+
+In this example, `my_instance` will now share the `Position` component from the `my_base` entity. If an application were to retrieve the Position component from both `my_base` and `my_instance`, it would observe that they are the same. Consider the following code snippet:
+
+```c
+Position *p_base = ecs_get_ptr(world, my_base, Position);
+Position *p_instance = ecs_get_ptr(world, my_instance, Position);
+assert(p_base == p_instance); // condition will be true
+```
+
+From this follows that modifying the component value of the base will also modify components of all its instances. Any entity can be specifed as a base entity (`my_root`, in this example).
+
+#### Adding inheritance relationships
+Inheritance relationships can be added after entities have been created with the `ecs_inherit` method. Consider:
+
+```c
+ecs_entity_t my_base = ecs_new(world, Position);
+ecs_entity_t my_instance = ecs_new(world, Velocity);
+
+// Create inheritance relationship where my_instance inherits from my_base
+ecs_inherit(world, my_instance, my_base);
+```
+
+If the inheritance relationship was already added to the entity, this operation will have no effects.
+
+#### Removing inheritance relationships
+Inheritance relationships can be removed after they have been added with the `ecs_disinherit` method. Consider:
+
+```c
+ecs_entity_t my_base = ecs_new(world, Position);
+ecs_entity_t my_instance = ecs_new_instance(world, my_base, Velocity);
+
+// Remove inheritance relationship
+ecs_disinherit(world, my_instance, my_base);
+```
+
+If the inheritance relationship was not added to the entity, this operation will have no effects.
+
+#### Inheritance and types
+Inheritance relationships are encoded in entity types using the `INSTANCEOF` entity flag. It is possible to create a type that describes what the base entity will be of an entity created with that type. Consider the following example:
+
+```c
+ECS_ENTITY(world, MyBase, Position);
+ECS_TYPE(world, MyType, INSTANCEOF | MyParent, Velocity);
+
+// This entity will be an instance of MyBase
+ecs_entity_t MyInstance = ecs_new(world, MyType);
+```
+
+Alternatively, the `INSTANCEOF` entity flag can also be specified directly into the ECS_ENTITY macro:
+
+```c
+ECS_ENTITY(world, MyBase, Position);
+ECS_ENTITY(world, MyInstance, INSTANCEOF | MyBase, Velocity);
+```
+
+Note that in order to be able to use entity flags, the parent entity must be named (it must have an `EcsId` component). When not considering the entity identifiers, the above examples are equivalent to:
+
+```c
+ecs_entity_t MyBase = ecs_new(world, Position);
+ecs_entity_t MyInstance = ecs_new_instance(world, MyBase, Velocity);
+```
+
+#### Multiple inheritance
+An entity may inherit from multiple base entities. Consider the following example:
+
+```c
+ECS_ENTITY(world, MyBase1, Position);
+ECS_ENTITY(world, MyBase2, Velocity);
+ECS_ENTITY(world, MyInstance, INSTANCEOF | MyBase1, INSTANCEOF | MyBase2, Mass);
+```
+
+In this scenario, the `MyInstance` entity will inherit components from both `MyBase1` and `MyBase2`. If two base entities contain the same component, the component will be shared from the base entity with the highest id (typically the one that is created last).
+
+#### Overriding components
+An instance may override the components of a base entity. Consider the following example:
+
+```c
+ecs_entity_t MyBase = ecs_new(world, Position);
+ecs_entity_t MyInstance = ecs_new_instance(world, MyBase, 0);
+
+// Override Position from MyBase
+ecs_add(world, MyInstance, Position);
+```
+
+When an instance overrides a component, it obtains a private copy of the component which it can modify without changing the value of the base component. An instance can remove an override by removing the component:
+
+```c
+// Revert to Position shared from MyBase
+ecs_remove(world, MyInstance, Position);
+```
+
+When an instance overrides a component from a base, the value from the base component is copied to the instance component.
+
+#### Overriding and initialization
+Component overrides enable a useful pattern for initializing components with default values when an entity is created. Consider the following example:
+
+```c
+ecs_entity_t MyBase = ecs_new(world, Position);
+    ecs_set(world, MyBase, Position, {10, 20});
+
+// Override Position on creation, copies the value from MyBase into MyInstance
+ecs_entity_t MyInstance = ecs_new_instance(world, MyBase, Position);
+```
+
+After this operation, `MyInstance` will have a private `Position` component that is initialized to `{10, 20}`. The utility of this pattern becomes more obvious when combined when used in combination with types in which the inheritance relationship is encoded:
+
+```c
+ECS_ENTITY(world, MyBase, Position, Velocity);
+  ecs_set(world, MyBase, Position, {0, 0});
+  ecs_set(world, MyBase, Velocity, {1, 1});
+  
+ECS_TYPE(world, MyType, INSTANCEOF | MyBase, Position, Velocity);
+
+// Creates an instance of MyBase and overrides Position & Velocity
+ecs_entity_t MyInstance = ecs_new(world, MyType);
+```
+
+Applications can leverage this pattern by creating "template" entities for which the sole purpose is to provide initial values for other entities. Often such template entities should not be matched with systems by default. To accomplish this, applications can add the `EcsDisabled` flag to entities:
+
+```c
+ECS_ENTITY(world, MyTemplate, EcsDisabled, Position, Velocity);
+```
+
+Alternatively, applications can choose to create the template entities as [prefabs](#prefabs). Prefab entities are ignored by default by systems, and offer additional features for creating template hierarchies.
+
+#### Specialization
+It is possible to create inheritance trees, where base entities themselves inherit from other base entities. This allows applications to create base entities that range from very generic to very specialized while allowing for code reuse. Consider the following example:
+
+```c
+ECS_ENTITY(world, MyRoot, Position);
+ECS_ENTITY(world, MyBase, INSTANCEOF | MyRoot, Velocity);
+ECS_ENTITY(world, MyInstance, INSTANCEOF | MyBase, Mass);
+```
+
+In this example, `MyInstance` will inherit `Position` and `Velocity` from its base entities, and will own `Mass`. The `MyBase` entity will own `Velocity` and shared `Position` from `MyRoot`.
+
+It is possible to override components in inheritance trees to specialize components:
+
+```c
+ECS_ENTITY(world, Planet, Mass);
+ECS_ENTITY(world, LightPlanet, INSTANCEOF | Planet, Mass);
+    ecs_set(world, LigthPlanet, Mass, {5.972 ^ 24});
+ECS_ENTITY(world, HeavyPlanet, INSTANCEOF | Planet, Mass);
+    ecs_set(world, LigthPlanet, Mass, {1898 ^ 27});
+```
+
+#### Prefabs
+Prefabs are entities that are solely meant to be used as templates for other entities. Prefabs behave and can be accessed just like ordinary entities, but they are ignored by systems by default. Furthermore, prefabs can be combined with hierarchies to create entity trees that can be reused by instantiating the top-level prefab.
+
+The only thing that distinguishes a prefab from an ordinary entity is the `EcsPrefab` component. Entities with this component are ignored by default by systems. An application can create a prefab like this:
+
+```c
+ECS_ENTITY(world, MyPrefab, EcsPrefab, Position);
+```
+
+Or by simply using the `ECS_PREFAB` macro:
+
+```c
+ECS_PREFAB(world, MyPrefab, Position);
+```
+
+Prefabs can be instantiated just like normal base entities:
+
+```c
+ECS_ENTITY(world, MyEntity, INSTANCEOF | MyPrefab);
+```
+
+or:
+
+```c
+ecs_entity_t e = ecs_new_instance(world, MyPrefab);
+```
+
+#### Prefab nesting
+Prefabs can be created as children of other prefabs. This lets applications create prefab hierarchies that can be instantiated by creating an entity with the top-level prefab. To create a prefab hierarchy, applications must explicitly set the value of the builtin `EcsPrefab` component:
+
+```c
+ECS_PREFAB(world, ParentPrefab, EcsPosition2D);
+  ECS_PREFAB(world, ChildPrefab, EcsPosition2D);
+     ecs_set(world, ChildPrefab, EcsPrefab, {.parent = ParentPrefab});
+     
+ecs_entity_t e = ecs_new_instance(world, ParentPrefab);
+```
+
+After running this example, entity `e` will contain a child entity called `ChildPrefab`. All components of `e` will be shared with `ParentPrefab`, and all components of `e`'s child will be shared with `ChildPrefab`. Just like with regular prefabs, component values can be overridden. To override the component of a child entity, an application can use the following method:
+
+```c
+ecs_entity_t child = ecs_lookup_child(world, e, "ChildPrefab"); // Resolve the child entity created by the prefab instantiation
+ecs_set(world, child, Position, {10, 20}); // Override the component of the child
+```
+
+An application can also choose to instantiate a child prefab directly:
+
+```c
+ecs_entity_t e = ecs_new_instance(world, ChildPrefab);
+```
+
+Applications may want to compose a prefab out of various existing prefabs. This can be achieved by combining nested prefabs with prefab variants, as is shown in the following example:
+
+```c
+// Prefab that defines a wheel
+ECS_PREFAB(world, Wheel, EcsPosition2D, EcsCircle2D);
+  ECS_PREFAB(world, Tire, EcsPosition2D, EcsCircle2D, Pressure);
+      ecs_set(world, Tire, EcsPrefab, {.parent = Wheel});
+
+// Prefab that defines a car
+ECS_PREFAB(world, Car, EcsPosition2D);
+  ECS_PREFAB(world, FrontWheel, INSTANCEOF | Wheel);
+     ecs_set(world, FrontWheel, EcsPrefab, {.parent = Car});
+     ecs_set(world, FrontWheel, EcsPosition, {-100, 0});
+  ECS_PREFAB(world, BackWheel, INSTANCEOF | Wheel);
+     ecs_set(world, BackWheel, EcsPrefab, {.parent = Car});
+     ecs_set(world, BackWheel, EcsPosition, {100, 0});     
+```
+
+In this example, the `FrontWheel` and `BackWheel` prefabs of the car inherit from `Wheel`. Children of the base (`Wheel`) are also automatically inherited by the instances (`FrontWheel`, `BackWheel`), thus for every entity that is created with `Car`, 4 additional child entities will be created:
+
+```c
+// Also creates FrontWheel, FrontWheel/Tire, BackWheel, BackWheel/Tire
+ecs_entity_t e = ecs_new_instance(world, Car); 
+```
+
 ## Components and Types
-Components, together with entities, are the most important building blocks for applications in Flecs. Like entities, components are orthogonally designed to do a single thing, which is to store data associated with an entity. Components, as with any ECS framework, do not contain any logic, and can be added or removed at any point in the application. A component can be registered like this:
+Components are important building blocks for applications in Flecs. Components do not contain any logic, and can be added or removed at any point in the application. A component can be registered like this:
 
 ```c
 ECS_COMPONENT(world, Position);
@@ -562,12 +798,7 @@ Types can be used with other operations as well, like `ecs_add`, `ecs_remove` an
 
 Types are not limited to grouping components. They can also group entities or systems. This is a key enabler for powerful features, like [prefabs](#prefabs), [containers](#containers) and [features](#features).
 
-### Owned components
-In Flecs, components can either be owned by an entity or shared with other entities. When a component is owned, it means that an entity has a private instance of the component that can be modified individually. Owned components are useful when a component is mutable, and individual entities require the component to have a unique value.
-
-The following sections describe the API operations for working with owned components.
-
-#### Add components
+### Add components
 In Flecs, an application can add owned components to an entity with the `ecs_add` operation. The operation accepts an entity and a _type_ handle, and can be used like this:
 
 ```c
@@ -584,7 +815,7 @@ ecs_add(world, e, Movable);
 
 After the operation, it is guaranteed that `e` will have all components that are part of the type. If the entity already had a subset of the components in the type, only the difference is added. If the entity already had all components in the type, this operation will have no side effects.
 
-##### A quick recap on handles
+#### A quick recap on handles
 The signature of `ecs_add` looks like this:
 
 ```c
@@ -595,7 +826,7 @@ Note that the function accepts a _type handle_ as its 3rd argument. Type handles
 
 For more details on how handles work, see [Handles](#handles).
 
-#### Remove components
+### Remove components
 Flecs allows applications to remove owned components with the `ecs_remove` operation. The operation accepts an entity and a _type_ handle, and can be used like this:
 
 ```c
@@ -612,7 +843,7 @@ ecs_remove(world, e, Movable);
 
 After the operation, it is guaranteed that `e` will not have any of the components that are part of the type. If the entity only had a subset of the types, that subset is removed. If the entity had none of the components in the type, this operation will have no side effects. If the set of components that was part of this operation matched any `EcsOnRemove` systems, they will be invoked.
 
-#### Set components
+### Set components
 With the `ecs_set` operation, Flecs applications are able to set a component on an entity to a specific value. Other than the `ecs_add` and `ecs_remove` operations, `ecs_set` accepts a `_component` (entity) handle, as it is only possible to set a single component at the same time. The `ecs_set` operation can be used like this:
 
 ```c
@@ -621,146 +852,75 @@ ecs_set(world, e, Position, {10, 20});
 
 After the operation it is guaranteed that `e` has `Position`, and that it is set to `{10, 20}`. If the entity did not yet have `Position`, it will be added by the operation. If the entity already had `Position`, it will only assign the value. If there are any `EcsOnSet` systems that match with the `Position` component, they will be invoked after the value is assigned.
 
-### Shared components
-Shared components in Flecs are components that are shared between multiple entities. Where owned components have a 1..1 relationship between a component and an entity, a shared component has a 1..N relationship between the component and entity. Shared components are only stored once in memory, which can drastically reduce memory usage of an application if the same component can be shared across many entities. Additionally, shared components are a fast way to update a component value in constant time (O(1)) for N entities.
-
-There are different mechanisms for sharing components across entities, which are described in the following sections.
-
-#### Prefabs
-A prefab is a special kind of entity in Flecs whos components are shared with any entity to which the prefab is added. Consider the following code example:
+### Tags
+Tags are components that do not contain any data. Internally it is represented as a component with data-size 0. Tags can be useful for subdividing entities into categories, without adding any data. A tag can be defined with the ECS_TAG macro:
 
 ```c
-ECS_PREFAB(world, Shape, Square, Color);
-
-ecs_entity_t e1 = ecs_new(world, Position);
-ecs_add(world, e1, Shape);
-
-ecs_entity_t e2 = ecs_new(world, Shape);
+ECS_TAG(world, MyTag);
 ```
 
-The result of this code will be an entity `e1` which has one owned component (`Position`) and two shared components (`Square`, `Color`), and an entity `e2` which only has two shared components (`Square`, `Color`). Both entities will share `Square`, `Color`, as the prefab has been added to both. Thus changing the `Color` for one entity, will change the color for the other one as well.
-
-In the API this is mostly transparent. Consider this example:
+Tags can be added/removed just like regular components with `ecs_new`, `ecs_add` and `ecs_remove`:
 
 ```c
-Color *color1 = ecs_get_ptr(world, e1, Color);
-Color *color2 = ecs_get_ptr(world, e2, Color);
+ecs_entity_t e = ecs_new(world, MyTag);
+ecs_remove(world, e, MyTag);
 ```
 
-Here, since both `e1` and `e2` share the color from `Shape`, the pointers `color1` and `color2` will point to the same memory. Modifying either values pointed to by them will change the value of the `Shape` entity as well.
-
-A prefab can be used both as a component (as shown in the first example) and as an entity. A prefab is mostly just a regular entity, which means that all the normal API calls like `ecs_add` and `ecs_remove` will work on a prefab as well, as is demonstrated by this example:
+A system can subscribe for instances of that tag by adding the tag to the system signature:
 
 ```c
-ecs_add(world, Shape, Size);
+ECS_SYSTEM(world, Foo, EcsOnUpdate, Position, MyTag);
 ```
 
-After this operation, the `Shape` prefab will have an additional component called `Size`, and all of the entities that added the prefab will now also have `Size` as a shared component.
-
-Systems will treat shared components from prefabs as if they were defined on the entities themselves, thus a system with the query `Square, Color` would match both entities `e1` and `e2` from the example. It should be noted at this point that the system will _not_ match with the `Shape` prefab itself. Prefabs are explicitly excluded from matching with systems, as they should not be evaluated by application logic directly.
-
-##### Overriding prefab components
-A typical usage of prefabs is to specify a common value for entities. Often, code that uses prefabs looks something like this:
+This introduces an additional column to the system which has no data associated with it, but systems can still access the tag handle with the `ECS_COLUMN_COMPONENT` marco:
 
 ```c
-ECS_PREFAB(world, Shape, Square, Color);
-ecs_set(world, Shape, Square, {.size = 50});
-ecs_set(world, Shape, Color, {.r = 255, .g = 0, .b = 0});
-
-ecs_entity_t e = ecs_new(world, Shape);
+void Foo(ecs_rows_t *rows) {
+    ECS_COLUMN(rows, Position, 1);
+    ECS_COLUMN_COMPONENT(rows, MyTag, 2);
+    
+    for (int i = 0; i < rows->count; i ++) {
+        ecs_remove(rows->world, rows->entities[i], MyTag);
+    }
+}
 ```
+### Builtin components
+Flecs uses a set of builtin components to implement some of its features. Some of these components can be accessed by the application, while others have opaque data types. The builtin components are:
 
-However, in some scenarios an entity may want to change the value of one of its shared components, without affecting the others. This is possible by _overriding_ the shared component. To override a component, an application can simply use the `ecs_add` operation:
+Name | Description | Access
+-----|-------------|-------
+EcsComponent | Stores the size of a component | Read
+EcsTypeComponent | Stores information about a named type | Opaque 
+EcsPrefab | Indicates that entity can be used as prefab, stores optional prefab parent | Read / Write
+EcsPrefabParent | Internal data for prefab parents | Opaque 
+EcsPrefabBuilder | Internal data for prefab parents | Opaque 
+EcsRowSystem | Internal data for row systems | Opaque
+EcsColSystem | Internal data for column systems | Opaque
+EcsId | Stores the name of an entity | Read / Write
+EcsHidden | Tag that indicates an entity should be hidden by UIs | Read / Write
+EcsDisabled | Tag that indicates an entity should not be matched with systems | Read / Write
 
-```c
-ecs_add(world, e, Color);
-```
-
-After the operation, the component will have turned into an owned component, and the entity can update its value without affecting the value of the `Shape` prefab (and therefore, of the entities that also share the components from `Shape`). Additionally, the _component value_ of the new owned `Color` component will have been initialized with the value of the shared component. This is an important property that enables many interesting design patterns, while also ensuring that a component value does not suddenly go from initialized (shared) to uninitialized (owned).
-
-Consequently, an entity can un-override a component by removing the component with the `ecs_remove` operation:
-
-```c
-ecs_remove(world, e, Color);
-```
-
-After this operation, the entity will have reverted to using the shared component from the `Shape` prefab. To remove the shared components entirely, the entity can remove the prefab with the `ecs_remove` operation:
-
-```c
-ecs_remove(world, e, Shape);
-```
-
-After this operation, the shared components will no longer appear on the entity.
-
-##### Prefabs and types
-It has been explained how [types](#components-and-types) can be used to create templates for entities, by adding sets of components commonly used together to the same type. When the type is added to the entity, all the components will be added as owned components to the entity. A quick example to recap:
-
-```c
-ECS_TYPE(world, Shape, Square, Color);
-
-ecs_entity_t e = ecs_new(world, Shape);
-```
-
-A limitation of types is that they cannot contain component values, thus after a type has been added to an entity, the value of the component is still uninitialized. With a prefab, it is possible to also define a set of commonly used components that can be added to an entity, and it _is_ possible to define component values, however with prefabs the components are not owned by the entity. It would be nice if there was a middle-ground, where it was both possible to add owned components, that are also initialized.
-
-It turns out this is achievable by combining the type and prefab features. A type can not only contain components, it can also contain prefabs. By adding both a prefab _and_ the components of a prefab to the same type, using the type will automatically override the components of the prefab, which will initialize them with the prefab values. Getting dizzy? Here is a code example:
-
-```c
-ECS_PREFAB(world, ShapePrefab, Square, Color);
-ECS_TYPE(world, Shape, ShapePrefab, Square, Color);
-
-ecs_set(world, ShapePrefab, Square, {.size = 50});
-ecs_set(world, ShapePrefab, Color, {.r = 255, .g = 0, .b = 0});
-
-ecs_entity_t e = ecs_new(world, Shape);
-```
-
-Lets breakdown what happens in this code. First a prefab called `ShapePrefab` is defined as usual with the `Square` and `Color` components. Then, a type called `Shape` is defined with _both_ the `ShapePrefab` _and_ the `Square` and `Color` components. After that, values are assigned to the prefab components, and the type is added to the entity.
-
-When the `Shape` type is added to the entity, first the prefab is added (this is guaranteed, regardless of the order in which the prefab is added to the type). Then, the components from the type are added to the entity. As `Square` and `Color` are already defined as shared components on the entity, adding them again will _override_ the components, just like when they would be overridden when using the `ecs_add` operation. Because overriding a component copies the value from the shared component to the owned component, the new owned components will be initialized with the value from the prefab.
-
-This is a powerful pattern for creating reusable entity templates that result in automatically initialized components, and is one of the preferred ways of instantiating entities.
-
-##### Nested prefabs
-Just like types, prefabs can also be nested. Consider the following code example:
-
-```c
-ECS_PREFAB(world, ShapePrefab, Position, Color);
-ECS_PREFAB(world, SquareShapePrefab, Shape, Square);
-ECS_PREFAB(world, CircleShapePrefab, Shape, Circle);
-
-ECS_TYPE(world, SquareShape, SquareShapePrefab, Position);
-ECS_TYPE(world, CircleShape, CircleShapePrefab, Position);
-
-ecs_set(world, ShapePrefab, Position, {0, 0});
-ecs_set(world, ShapePrefab, Color, {.r = 255, .g = 0, .b = 0});
-ecs_set(world, SquareShapePrefab, Square, {.size = 50});
-ecs_set(world, CircleShapePrefab, Circle, {.radius = 25});
-
-ecs_entity_t e = ecs_new(world, SquareShape);
-```
-
-In this example, `e` will have an owned component `Position` which is initialized to `{0, 0}`, and `Color`, and `Square` as shared components. Other than with types, where only the union of components of all the nested types are associated with the entity, prefabs will be associated with the entity, and as mentioned in [Overriding prefab components](#overriding-prefab-components) prefabs have to be explicitly removed if an entity wants to disassociate itself from them.
+Builtin components can be get/set just like normal components. Writing a component that is read only can however cause undefined behavior.
 
 ## Systems
 Systems let applications execute logic on a set of entities that matches a certain component expression. The matching process is continuous, when new entities (or rather, new _entity types_) are created, systems will be automatically matched with those. Systems can be ran by Flecs as part of the built-in frame loop, or by invoking them individually using the Flecs API.
 
-### System queries
-A system query specifies which components the system is interested in. By default, it will match with entities that have all of the specified components in its expression. An example of a valid system query is:
+### System signatures
+A system signature specifies which components the system is interested in. By default, it will match with entities that have all of the specified components in its expression. An example of a valid system signature is:
 
 ```
 Position, Velocity
 ```
 
-The two elements are the components the system is interested in. Within a query they are called "columns", and they can be thought of as elements in the `SELECT` clause of an SQL query. The order in which components are specified is important, as the system implementation will need to access component in this exact order. Care must be taken that when changing the order of columns, the implementation is updated to reflect this. More on this in "System API".
+The two elements are the components the system is interested in. Within a signature they are called "columns", and they can be thought of as elements in the `SELECT` clause of an SQL query. The order in which components are specified is important, as the system implementation will need to access component in this exact order. Care must be taken that when changing the order of columns, the implementation is updated to reflect this. More on this in "System API".
 
-The system query is the only mechanism for specifying the input for the system. Any information that the system needs to run must therefore be captured in the system query. This strict enforcement of the interface can sometimes feel like a constraint, but it makes it possible to reuse systems across different applications. As you will see, system queries have a number of features that make it easier to specify a range of possible input parameters.
+The system signature is the only mechanism for specifying the input for the system. Any information that the system needs to run must therefore be captured in the system signature. This strict enforcement of the interface can sometimes feel like a constraint, but it makes it possible to reuse systems across different applications. As you will see, system signatures have a number of features that make it easier to specify a range of possible input parameters.
 
 #### Column operators
-System queries may contain operators to express optionality or exclusion of components. The most common one is the `,` (comma) which is equivalent to an AND operator. Only if an entity satisfies each of the expressions separated by the `,`, it will be matched with the system. In addition to the `,` operator, queries may contain a number of other operators:
+System signatures may contain operators to express optionality or exclusion of components. The most common one is the `,` (comma) which is equivalent to an AND operator. Only if an entity satisfies each of the expressions separated by the `,`, it will be matched with the system. In addition to the `,` operator, signatures may contain a number of other operators:
 
 ##### OR operator
-The OR operator (`|`) allows the system to match with one component in a list of components. An example of a valid query with an OR operator is:
+The OR operator (`|`) allows the system to match with one component in a list of components. An example of a valid signature with an OR operator is:
 
 ```
 Position, Velocity | Rotation
@@ -769,7 +929,7 @@ Position, Velocity | Rotation
 Inside of the system implementation, an application has the possibility to determine which component in the OR expression was the one that caused the system to match. An OR expression may contain any number of components.
 
 ##### NOT operator
-The NOT operator (`!`) allows the system to exclude entities that have a certain component. An example of a valid query with a NOT operator is:
+The NOT operator (`!`) allows the system to exclude entities that have a certain component. An example of a valid signature with a NOT operator is:
 
 ```
 Position, !Velocity
@@ -778,7 +938,7 @@ Position, !Velocity
 Inside the system implementation an application will be able to obtain metadata for the column (it will be able to see the component type for `Velocity`), but no actual data will be associated with it.
 
 ##### Optional operator
-The optional operator (`?`) allows a system to optionally match with a component. An example of a valid query with an optional operator is:
+The optional operator (`?`) allows a system to optionally match with a component. An example of a valid signature with an optional operator is:
 
 ```
 Position, ?Velocity
@@ -787,30 +947,129 @@ Position, ?Velocity
 Inside the system implementation, an application will be able to check whether the component was available or not.
 
 #### Column source modifiers
-System queries can request components from a variety of sources. The most common and default source is from an entity. When a system specifies `Position, Velocity` as its query, it will match _entities_ that have `Position, Velocity`. A system may however require components from other entities than the one being iterated over. To streamline this use case, reduce `ecs_get` API calls within systems, and prevent excessive checking on whether components are available on external entities, the system query can capture these requirements. A query may contain the folllowing modifiers:
+System signatures can request components from a variety of sources. The most common and default source is from an entity. When a system specifies `Position, Velocity` as its signature, it will match _entities_ that have `Position, Velocity`. A system may however require components from other entities than the one being iterated over. To streamline this use case, reduce `ecs_get` API calls within systems, and prevent excessive checking on whether components are available on external entities, the system signature can capture these requirements. A signature may contain the folllowing modifiers:
 
-##### SELF modifier
-This is the default modifier, and is implied when no modifiers are explicitly specified. An example of the `SELF` modifier is:
+##### SELF source
+This is the default source, and is implied when no source is explicitly provided. A system will match SELF components against the entities to be iterated over. An example of a signature with `SELF` as source is:
 
 ```
 Position, Velocity
 ```
 
-This system will match with any entities that have the `Position, Velocity` components. The components will be available to the system as owned (non-shared) columns, _except_ when a component is provided by a Prefab, in which case the component will be shared.
+This system will match with any entities that have the `Position, Velocity` components. The components will be available to the system as owned (non-shared) columns, except when a component is provided by an inherited entity, in which case the component will be shared.
 
-##### ID modifier
-The `ID` modifier lets an application pass handles to components or other systems to a system. This is frequently useful, as systems may need component handles to add or set components on entities that may not be part of the entity yet. Another use case for this feature is passing a handle to another `EcsManual` system to the system, which the system can then execute. This is frequently used when a system needs to evaluate a set of entities for every matching entity. An example of the `ID` modifier is:
+The `SELF` source gives no guarantees about whether the component is owned or shared. Therefore the component data passed into the system may be either an array or a pointer to a single value. If a system does not know in advance whether a for example `Velocity` is owned or shared, it can use the following code to safely access the component data:
+
+```c
+ECS_COLUMN(rows, Position, p, 1);
+ECS_COLUMN(rows, Velocity, v, 2);
+
+if (ecs_is_shared(rows, 2)) {
+    for (int i = 0; i < rows->count; i ++) {
+        p[i].x += v->x;
+        p[i].y += v->x;
+    }
+} else {
+    for (int i = 0; i < rows->count; i ++) {
+        p[i].x += v[i].x;
+        p[i].y += v[i].x;
+    }
+}
+```
+
+Alternatively a system can use the `ecs_field` function, which abstracts away the difference between owned and shared columns:
+
+```c
+ECS_COLUMN(rows, Position, p, 1);
+
+for (int i = 0; i < rows->count; i ++) {
+    Velocity *v = ecs_field(rows, Velocity, 2, i);
+    p[i].x += v->x;
+    p[i].y += v->x;
+}
+```
+
+##### OWNED source
+OWNED is similar to SELF in that the component is matched with the entities to be iterated over, but will only match entities that own the component. Components from base entities (added either with `ecs_new_instance` or `ecs_inherit`) will not be matched.
 
 ```
-Position, ID.Velocity
+Position, OWNED.Velocity
 ```
 
-This will match any entity that has the `Position` component, and pass the handle to the `Velocity` component to the system. This allows the system implementation to add or set the `Velocity` component on the matching entities.
+This system will match with any entities that have the `Position, Velocity` components. The `Position` component can be either owned or shared, where the `Velocity` component is guaranteed to be owned by the entity, and cannot come from a base entity.
 
-`ID` columns have no data, and as such should not be accessed as owned or shared columns. Instead, the system should only attempt to obtain the handle to the component or component type.
+An owned column is passed as an array into a system, and can always be safely accessed like this:
 
-##### CONTAINER modifier
-The `CONTAINER` modifier allows a system to select a component from the entity that contains the currently iterated over entity. An example of the `CONTAINER` modifier is:
+```c
+ECS_COLUMN(rows, Position, p, 1);
+ECS_COLUMN(rows, Velocity, v, 2);
+
+for (int i = 0; i < rows->count; i ++) {
+    p[i].x += v[i].x;
+    p[i].y += v[i].x;
+}
+```
+
+##### SHARED source
+SHARED is similar to SELF in that the component is matched with the entities to be iterated over, but will only match entities that do not own the component. Only components from base entities (added either with `ecs_new_instance` or `ecs_inherit`) will be matched.
+
+```
+Position, SHARED.Velocity
+```
+
+This system will match with any entities that have the `Position, Velocity` components. The `Position` component can be either owned or shared, where the `Velocity` component is guaranteed to be shared, and will come from a base entity.
+
+A shared column is passed in as a pointer into the system, and can always be safely accessed like this:
+
+```c
+ECS_COLUMN(rows, Position, p, 1);
+ECS_COLUMN(rows, Velocity, v, 2);
+
+for (int i = 0; i < rows->count; i ++) {
+    p[i].x += v->x;
+    p[i].y += v->y;
+}
+```
+
+##### NOTHING source
+The NOTHING source passes components to a system that are not matched with any entities. This is a convenient method for passing component/entity handles into systems. If for example a system wants to add the `Velocity` component to entities with `Position`, the `Velocity` handle can be passed into the system like this:
+
+```
+Position, .Velocity
+```
+
+A component passed in with a `NOTHING` source can be accessed like this:
+
+```c 
+ECS_COLUMN(rows, Position, p, 1);
+ECS_COLUMN_COMPONENT(rows, Velocity, 2);
+
+for (int i = 0; i < rows->count; i ++) {
+    ecs_add(rows->world, rows->entities[i], Velocity);
+}
+```
+
+Any entity identifier can be passed into a system with a `NOTHING` modifier. This can often be useful when combined with manual systems:
+
+```
+Position, .MyManualSystem
+```
+
+`MyManualSystem` can be accessed like this:
+
+```c
+ECS_COLUMN(rows, Position, p, 1);
+ECS_COLUMN_ENTITY(rows, MyManualSystem, 2);
+
+for (int i = 0; i < rows->count; i ++) {
+    ecs_run(rows->world, MyManualSystem, rows->delta_time, &rows->entities[i]);
+}
+```
+
+Empty columns have no data, and as such should not be accessed as owned or shared columns. Instead, the system should only attempt to obtain the handle to the component or component type.
+
+##### CONTAINER source
+The `CONTAINER` source allows a system to select a component from the entity that contains the currently iterated over entity. An example of the `CONTAINER` modifier is:
 
 ```
 CONTAINER.Position, Position, Velocity
@@ -818,49 +1077,78 @@ CONTAINER.Position, Position, Velocity
 
 This will match all entities that have `Position, Velocity`, _and_ that have a container (parent) entity that has the `Position` component. This facilitates building systems that must traverse entities in a hierarchical manner.
 
-`CONTAINER` columns are available to the system as a shared component.
+`CONTAINER` columns can be accessed the same way as `SHARED` columns.
 
-##### SINGLETON modifier
-The `SINGLETON` or `$` modifier selects components from the singleton entity. As the name suggests, this allows a system to access a single, global (but world-specific) instance of a component. An example of the `SINGLETON` modifier is:
+##### CASCADE source
+The `CASCADE` source is similar to an _optional_ `CONTAINER` column, but in addition it ensures that entities are iterated over in the order of the container hierarchy. 
 
-```
-$Position, Position, Velocity
-```
-
-This will match all entities that have `Position, Velocity`, and make the `Position` component from the singleton entity available to the system.
-
-`SINGLETON` columns are available to the system as a shared component.
-
-##### SYSTEM modifier
-In some cases it is useful to have stateful systems that either track progress in some way, or contain information pointing to an external source of data (like a database connection). The `SYSTEM` modifier allows for an easy way to access data associated with the system. An example of the `SYSTEM` modifier is:
+For a hierarchy like this:
 
 ```
-SYSTEM.DbConnection, Position, Velocity
+   A
+  / \
+ B   C
+    / \
+   D   E 
 ```
 
-This will match all entities with `Position, Velocity`, and automatically add the `DbConnection` component to the system. Often this pattern is paired with an `EcsOnAdd` system for the `DbConnection` component, which would be immediately executed when the system is defined, and set up the database connection (or other functionality) accordingly.
-
-`SYSTEM` columns are available to the system as a shared component.
-
-##### ENTITY modifier
-In some cases, it is useful to get a component from a specific entity. In this case, the source modifier can specify the name of a named entity (that has the `EcsId` component) to obtain a component from that entity. An example of the `ENTITY` modifier is:
+the order in which entities will be visited by the system will be `A, B, C, D, E`. Note how the system also matches the root entities (`A`) that do not have a container (hence "optional"). An example of a `CASCADE` modifier is:
 
 ```
-Position, SomeEntity.Velocity
+CASCADE.Position, Position, Velocity
 ```
 
-This will match all antities with the `Position` component, and pass the `Velocity` component of `SomeEntity` to the system. The equivalent of this functionality would be to pass handles to `SomeEntity` and `Velocity` with the `ID` component, and then do an `ecs_get` from within the system, like so:
+The order will be determined by the container that has the specified component (`Position` in the example). Containers of the entity that do not have this component will be ignored. 
+
+`CASCADE` columns can be accessed the same way as `SHARED` columns.
+
+##### SYSTEM source
+The `SYSTEM` modifier adds components or tags to a system and passes them into the system. This can be useful when a system needs additional context. An example:
 
 ```
-Position, ID.SomeEntity, ID.Velocity
+Position, Velocity, SYSTEM.DbConnection
 ```
 
-Using the `ENTITY` modifier is however much less verbose, and can potentially also be optimized as the framework may use a more efficient version of `ecs_get`.
+This will match all entities with `Position, Velocity`, and automatically add the `DbConnection` component to the system. Often this pattern is paired with an `EcsOnAdd` system for the `DbConnection` component, which would be immediately executed when the system is defined, and set up the database connection (or any functionality) accordingly.
 
-`ENTITY` columns are available to the system as a shared component.
+Another common pattern is to add the `EcsHidden` tag to a system, which is used to hide a system from UIs (if the UI supports it) and is often added to private systems in a module:
+
+```
+Position, Velocity, SYSTEM.EcsHidden
+```
+
+Another common tag to add is the `EcsOnDemand` tag, which marks the system as an on-demand system, meaning it will only be enabled if its outputs are required by another system:
+
+```
+[out] Position, Velocity, SYSTEM.EcsOnDemand
+```
+
+`SYSTEM` columns can be accessed the same way as `SHARED` columns.
+
+##### SINGLETON source
+The `SINGLETON` source (`$`) enables passing in components from the singleton entity. It can be used like this:
+
+```
+Position, $.Velocity
+```
+
+The system will only be invoked if the singleton entity has the `Velocity` component.
+
+`SINGLETON` columns can be accessed the same way as `SHARED` columns.
+
+##### ENTITY source
+The `ENTITY` source enables passing in components from arbitrary entiites. It can be used like this:
+
+```
+Position, MyEntity.Velocity
+```
+
+The system will only be invoked if the entity has the `Velocity` component.
+
+`ENTITY` columns can be accessed the same way as `SHARED` columns.
 
 ### System API
-Now that you now how to specify system queries, it is time to find out how to use the columns specified in a query in the system itself! First of all, lets take a look at the anatomy of a system. Suppose we define a system like this in our application `main`:
+Now that you now how to specify system signatures, it is time to find out how to use the columns specified in a signature in the system itself! First of all, lets take a look at the anatomy of a system. Suppose we define a system like this in our application `main`:
 
 ```
 ECS_SYSTEM(world, Move, EcsOnUpdate, Position, Velocity);
@@ -878,7 +1166,7 @@ void Move(ecs_rows_t *rows) {
 The `rows` parameter provides access to the entities that matched with the system, and a lot of other useful information. This example already has the typical `for` loop that defines many system implementations, and the application can get the number of entities to iterate over from the `rows->count` member.
 
 #### The ECS_COLUMN macro
-To actually do something useful with the matched entities, the functino needs to obtain the components. In order to do this, the code needs to look at the system query, which in this case is `Position, Velocity`. This query has two columns, and the components can be accessed from the system by using the corresponding column index:
+To access the data of matched entities, the system function needs to obtain pointers to the component arrays. In order to do this, the code needs to look at the system signature, which in this case is `Position, Velocity`. This signature has two columns, and the components can be accessed from the system by using the corresponding column index:
 
 ```c
 void Move(ecs_rows_t *rows) {
@@ -890,7 +1178,7 @@ void Move(ecs_rows_t *rows) {
 }
 ```
 
-This macro requires the `rows` parameter, to get access to the matched entities, the type of the component (`Position`) a name for the variable which will point to the component array (`position`) and the column index (`1`). Note how the column index starts counting from `1`. This is because column index `0` is reserved for the column that stores the _entity identifiers_. More on that later.
+This macro requires the `rows` parameter, to get access to the matched entities, the type of the component (`Position`) a name for the variable which will point to the component array (`position`) and the column index (`1`). Note how the column index starts counting from `1`. This is because column index `0` is reserved for the column that stores the _entity identifiers_.
 
 Now the system logic can be written, by using the `position` and `velocity` variables. Because they point to arrays of the component types (`Position`, `Velocity`) the application can simply use them as C arrays, like so:
 
@@ -901,44 +1189,59 @@ void Move(ecs_rows_t *rows) {
     
     for (int i = 0; i < rows->count; i ++) {
         position[i].x += velocity[i].x;
-        position[i].y += velocity[i[.y;
+        position[i].y += velocity[i].y;
     }
 }
 ```
 
-The `ECS_COLUMN` macro provides the fastest, easiest access to components in a system. It can however not be used for any column. The next sections discuss some of the other macro's that can be used to obtain data from within a system.
-
-#### The ECS_SHARED macro
-When a component is not stored on a matched entity, it is shared. For a system this means that instead of having an array of component values, there is only a single component instance available for this iteration. Flecs has been designed in such a way that a shared component never changes within an invocation of a system, though a system may be invoked multiple times per run (more on that later). This means that a system can obtain a shared component once.
-
-An example of a shared component is when using the `ENTITY` column source modifier. With this modifier, the application can pass a component from an entity that is not (necessarily) matched with the system, like so:
-
-```
-Position, Velocity, Player.Position
-```
-
-The `Player.Position` identifies the `Position` component on an entity named `Player`. This entity could have been created like so:
+When a column contains shared data, a system should not access the data as an array. Colummns that are guaranteed to be shared are columns with the `CONTAINER` modifier, `SYSTEM` modifier or `ENTITIY` modifier. In this case, a system should treat the column pointer as an ordinary pointer instead of an array:
 
 ```c
-ECS_ENTITY(world, Player, Position);
+void Move(ecs_rows_t *rows) {
+    ECS_COLUMN(rows, Position, position, 1);
+    ECS_COLUMN(rows, Velocity, velocity, 2); // Assuming column 2 is shared
+    
+    for (int i = 0; i < rows->count; i ++) {
+        // Don't access velocity as array
+        position[i].x += velocity->x;
+        position[i].y += velocity->y;
+    }
+}
 ```
 
-With the above system query, the `Position` component of `Player` will be passed to the system function. To access it, the system should not use the `ECS_COLUMN` macro (attempting this will result in an assert) as this suggests that the variable can be used as an array. Instead, the system should use the `ECS_SHARED` macro, which is invoked similar to `ECS_COLUMN`: 
+In some cases a normal system signature can still cause shared components to be matched with systems, which can happen if entities inherit from base entities. If an application uses inheritance, a system needs to be made robust against this. Consider the following example:
 
 ```c
 void Move(ecs_rows_t *rows) {
     ECS_COLUMN(rows, Position, position, 1);
     ECS_COLUMN(rows, Velocity, velocity, 2);
-    ECS_SHARED(rows, Position, position_player, 3);
+    
+    bool velocity_is_shared = ecs_is_shared(rows, 2);
     
     for (int i = 0; i < rows->count; i ++) {
-        position[i].x = position_player->x + velocity[i].x;
-        position[i].y = position_player->x + velocity[i[.y;
+        if (velocity_is_shared) {
+            position[i].x += velocity->x;
+            position[i].y += velocity->y;        
+        } else {
+            position[i].x += velocity[i].x;
+            position[i].y += velocity[i].y;
+        }
     }
 }
 ```
 
-Note how the code uses the `position_player` variable as a pointer, and not as an array, as expected. Shared components are common in Flecs, and you will often find yourself writing systems using both `ECS_COLUMN` and `ECS_SHARED`. Familiarizing yourself with these concepts will go a long way in understanding how to write effective Flecs applications!
+For systems with large numbers of components for which it is unknown whether a column is shared or not, it can be unwieldy to have to check all columns and create if statements that switch between access methods. In this case a system can choose to use the `ecs_field` function, which has a larger overhead than accessing the data directly, but abstracts away from the difference between an owned and a shared column. This is the same code with `ecs_field`:
+
+```c
+void Move(ecs_rows_t *rows) {    
+    for (int i = 0; i < rows->count; i ++) {
+        Position *p = ecs_field(rows, Position, 1, i);
+        Velocity *v = ecs_field(rows, Velocity, 2, i);
+        position->x += velocity->x;
+        position->y += velocity->y;        
+    }
+}
+```
 
 #### The ECS_COLUMN_COMPONENT macro
 When a system needs a component handle to one of its components, the `ECS_COLUMN_COMPONENT` will declare a handle to the component in the system. This is useful when a system needs to use the Flecs API, like the `ecs_set` function. When the `ecs_set` function is called, it expects the handle for a component to be there. In the application `main` function this happens automatically when a component is defined with `ECS_COMPONENT` or when it is imported with `ECS_IMPORT`, but a system needs to do this itself.
@@ -962,10 +1265,10 @@ void Move(ecs_rows_t *rows) {
 
 This code may look a bit weird as it introduces a few things that haven't been covered yet. First of all, note how the `world` object is passed into the system through the `rows` parameter. This lets a system call Flecs API functions, as all functions at least require a reference to an `ecs_world_t` instance. Secondly, note how the system obtains the entity id of the currently iterated over entity with `rows->entities`. Finally, note how the `ecs_set` function is able to use the `Position` component. The function requires a handle to the `Position` component to be defined, or it will result in a compiler error (try removing the `ECS_COLUMN_COMPONENT` macro).
 
-This macro can also be used when a column uses the `ID` source modifier. For example, if a system has the following query:
+This macro can also be used when a column uses the `NOTHING` modifier. For example, if a system has the following signature:
 
 ```
-Position, ID.Velocity
+Position, .Velocity
 ```
 
 Then the system can obtain the handle to the `Velocity` component with the following statement:
@@ -994,49 +1297,6 @@ void Move(ecs_rows_t *rows) {
 ```
 
 Aside from this being a highly contrived example, it demonstrates the difference in how entity handles and type handles are used. When unsure about when to use an entity handle or a type handle, refer to the API documentation.
-
-#### The ecs_field function
-In some cases, a system may not know whether a component is shared or not. This is particularly the case when a system is generic, and it does not know when an application uses prefabs. While using prefabs for certain components is uncommon (like `Position`), for other components this may be less obvious. In such cases, a system may choose to use the `ecs_field` function, which is a less performant alternative to `ECS_COLUMN` and `ECS_SHARED`, but with the benefit that it is agnostic to whether a component is owned or shared.
-
-This is an example of how to use the `ecs_field` function:
-
-```c
-void Move(ecs_rows_t *rows) {    
-    for (int i = 0; i < rows->count; i ++) {
-        Position *p = ecs_field(rows, Position, i, 1);
-        Velocity *v = ecs_field(rows, Velocity, i, 2);
-        p->x += v->x;
-        p->y += v->y;
-    }
-}
-```
-
-Note how this example does not use any macro's to import the components, but instead uses `ecs_field` to obtain a pointer to the component of the entity that is being iterated over directly. While `ecs_field` is quite fast, it is not as fast as iterating over an array, and a compiler will not be able to vectorize code that uses `ecs_field`.
-
-#### The ECS_COLUMN_TEST and ECS_SHARED_TEST macro's
-Both the `ECS_COLUMN` and `ECS_SHARED` macro's have an equivalent macro with the postfix `_TEST`. This macro should be used when a system is unsure about whether a component is available or not. This may be the case with optional columns. For example, when a system has this signature:
-
-```
-Position, ?Velocity
-```
-
-The components should be retrieved like this:
-
-```c
-void Move(ecs_rows_t *rows) {
-    ECS_COLUMN(rows, Position, position, 1);
-    ECS_COLUMN_TEST(rows, Velocity, velocity, 2);
-    
-    for (int i = 0; i < rows->count; i ++) {
-      if (velocity) {
-          position[i].x += velocity[i].x;
-          position[i].y += velocity[i].y;
-      }
-    }
-}
-```
-
-Note how if the component is not available, the variable of the optional column (`velocity`) will be set to `NULL`, which can then be tested by the system implementation.
 
 ### System phases
 Each frame in Flecs is computed in different phases, which define the execution order in which certain systems are executed. Phases are necessary to guarantee interoperability between systems in different modules, as it imposes a high-level order on the systems that need to be executed each frame. A simple example is a system that updates game state, and a system that renders a frame. The first system needs to be executed before the second one, to ensure the correct data is rendered. 
@@ -1141,3 +1401,540 @@ ECS_TYPE(world, ParentFeature, ChildFeature1, ChildFeature2);
 ```
 
 When designing modules it is good practice to not directly expose handles to systems, but instead only expose feature handles. This decreases the chance that an application has to be modified because the implementation of a module changed.
+
+### Staging
+ECS frameworks typically store data in contiguous arrays where systems iterate over these arrays, and Flecs is no exception. A challenge for ECS frameworks is how to allow for mutations, such as adding/removing components and removing entities which alter the array. To address this, ECS frameworks often have limitations on which operations are allowed while iterating. A common solution to this problem is to implemement something called a _command buffer_, which stores a list of operations that are executed after an iteration.
+
+Command buffers however have several disadvantages. First of all, mutations are not visible until the next iteration. When a system adds a component, and subsequently tests if the component has been added, the test would return false, which is not intuitive. Another disadvantage is that applications need a different API while iterating.
+
+Flecs uses an alternative solution called "staging". Staging uses a data structure (called a "stage" or "staging area") which stores the _result_ of operations instead of the operations themselves. The data structure behaves like a "branch" of the main (not staged) data store, and can be queried by the flecs API in much the same way as the main data store can be queried. This allows the Flecs API to mutate data without limitations, while still having access to the mutated data while iterating. This capability is also a key enabling feature for [multithreading](#staging-and-multithreading).
+
+The following code shows an example of a system that relies on staging:
+
+```c
+void System(ecs_rows_t *rows) {
+    ECS_COLUMN_COMPONENT(rows, Velocity, 2);
+
+    for(int i = 0; i < rows->count; i ++) {
+        // Add component Velocity to stage, set its value to {1, 1}
+        ecs_set(rows->world, rows->entities[i], Velocity, {1, 1});
+        
+        // Operation returns true
+        ecs_has(rows->world, rows->entities[i], Velocity);
+        
+        // Operation returns pointer to the initialized Velocity
+        ecs_get_ptr(rows->world, rows->entities[i], Velocity);
+    }
+}
+
+int main(int argc, const char *argv[]) {
+    ecs_world_t *world = ecs_init();
+    
+    ECS_SYSTEM(world, System, EcsOnUpdate, Position, !Velocity);
+    
+    // API calls done while in ecs_progress are staged
+    ecs_progress(world, 1);
+    // Stage is merged after executing systems
+    
+    return ecs_fini();
+}
+```
+
+Note how you cannot tell from the API calls that staging is used. Flecs "knows" that the application is iterating over data, and when it is in this mode, all operations will automatically query and write to the stage.
+
+#### Staged vs. inline modifications
+When a system is iterating, it receives contiguous arrays with component data. These arrays are not staged, as they provide direct access to the components in the main data store. Applications can change the contents of these arrays, which is referred to as "inline modifications". An important decision system implementors have to make is whether to modify data inline, or whether to use staging. The following code example shows the difference between the two:
+
+```c
+void System(ecs_rows_t *rows) {
+    ECS_COLUMN(rows, Position, p, 1);
+    ECS_COLUMN_COMPONENT(rows, Position, 1);
+    ECS_COLUMN(rows, Velocity, v, 2);
+
+    for(int i = 0; i < rows->count; i ++) {
+        // Inline modification
+        v[i].x *= 0.9;
+        v[i].y *= 0.9;
+        
+        // Staged modification
+        ecs_set(rows->world,  rows->entities[i], Position, {p[i].x + v[i].x, p[i].y + v[i].y});
+    }
+}
+```
+
+A staged modification, while much slower than an inline modification, has as advantage that the component is not changed until data is merged, which means that subsequent systems can still have access to the previous value. If a subsequently executed system wants to read the value set in the stage, it has to use the `ecs_get` API.
+
+A system _always_ receives the component arrays from the main data store. If a previously executed system added components to the stage, the only way to access these values is through the `ecs_get` API.
+
+Using `ecs_get` and `ecs_set` has a performance penalty however as nothing beats the raw performance of inline reads/writes on a contiguous array. Expect application performance to take a significant hit when using these API calls versus using inline modifications.
+
+#### Staging and ecs_get
+When an application uses `ecs_get` while iterating, the operation may return data from to the main data store or to the stage, depending on whether the component has been added to the stage. Consider the following example:
+
+```c
+void System(ecs_rows_t *rows) {
+    ECS_COLUMN(rows, Position, p, 1);
+    ECS_COLUMN_COMPONENT(rows, Velocity, 2);
+
+    for(int i = 0; i < rows->count; i ++) {
+        // Get data from main Flecs store
+        Velocity *v = ecs_get_ptr(rows->world, rows->entities[i]);
+        
+        // Explicitly set component in the stage
+        ecs_set(rows->world, rows->entities[i], Velocity, {1, 1});
+        
+        // ecs_get_ptr now returns component from the stage
+        v = ecs_get_ptr(rows->world, rows->entities[i], Velocity);
+        
+        // Change value in the stage
+        v[i].x ++;
+    }
+}
+```
+
+The `ecs_get_ptr` operation returns a pointer from the main data store _unless_ the component is staged.
+
+#### Overwriting the stage
+A single iteration may contain multiple operations on the same component. Consider the following example:
+
+```c
+void System(ecs_rows_t *rows) {
+    ECS_COLUMN(rows, Position, p, 1);
+    ECS_COLUMN_COMPONENT(rows, Velocity, 2);
+
+    for(int i = 0; i < rows->count; i ++) {
+        // Set component Velocity in the stage
+        ecs_set(rows->world, rows->entities[i], Velocity, {1, 1});
+        
+        // Overwrite component Velocity in stage
+        ecs_set(rows->world, rows->entities[i], Velocity, {2, 2});
+    }
+}
+```
+
+The stage behaves the same as the main data store, in that it stores entities with their type, and tables in which all components for a type are stored. When a component is written twice in an iteration, it just means that its record in the staged table will be overwritten. This example is contrived, but it is not inconceivable that two subsequent systems modify the same component in a single iteration.
+
+#### Staging and EcsOnAdd, EcsOnSet and EcsOnRemove
+Systems that are executed after adding, setting and removing components (`EcsOnAdd`, `EcsOnSet`, `EcsOnRemove`) work also on staged components. When a component is added while iterating, the applicable `EcsOnAdd` systems will be called and the staged component will be exposed as a regular `ECS_COLUMN`. Note that this is different from regular (`EcsOnUpdate` etc) systems, where an `ECS_COLUMN` always returns an array from the main data store.
+
+The `EcsOnAdd` and `EcsOnSet` systems are executed by the `ecs_add`/`ecs_set` operation. This means that data is always initialized by an `EcsOnAdd` system before `ecs_add` returns, and that any actions executed by an `EcsOnSet` system are executed before `ecs_set` returns.
+
+`EcsOnRemove` systems however are not immediately ran by `ecs_remove`. Such systems are typically used as destructors which clean up/free any resources that a component owns. As such, `EcsOnRemove` systems can invalidate component values, making accessing a component value after executing an `EcsOnRemove` unsafe. For this reason, `EcsOnRemove` systems are executed during the merge, and not while iterating. This ensures that for the duration of the iteration, it is guaranteed that component values passed into systems are valid.
+
+The folllowing code shows an example of an `EcsOnAdd` and `EcsOnRemove` system, and when they are executed:
+
+```c
+void AddVelocity(ecs_rows_t *rows) {
+    ECS_COLUMN(rows, Velocity, 1);
+
+    for(int i = 0; i < rows->count; i ++) {
+        // ...
+    }
+}
+
+void RemoveVelocity(ecs_rows_t *rows) {
+    ECS_COLUMN(rows, Velocity, 1);
+
+    for(int i = 0; i < rows->count; i ++) {
+        // ...
+    }
+}
+
+void System(ecs_rows_t *rows) {
+    ECS_COLUMN_COMPONENT(rows, Velocity, 1);
+
+    for(int i = 0; i < rows->count; i ++) {
+        // AddVelocity will be invoked before ecs_add returns
+        ecs_add(rows->world, rows->entities[i], Velocity);
+        
+        // RemoveVelocity will not be invoked until iteration finishes
+        ecs_remove(rows->world, rows->entities[i], Velocity);
+    }
+}
+
+int main(int argc, const char *argv[]) {
+    ecs_world_t *world = ecs_init();
+    
+    ECS_SYSTEM(world, AddVelocity, EcsOnAdd, Velocity);
+    ECS_SYSTEM(world, RemoveVelocity, EcsOnRemove, Velocity);
+    ECS_SYSTEM(world, System, EcsOnUpdate, Velocity);
+
+    ecs_progress(world, 1);
+    
+    return ecs_fini();
+}
+```
+
+#### Staging and system phases
+Systems in Flecs can be be assigned to different phases (see [System phases](#system-phases)). To ensure that data is available between phases, a merge is performed between each phase. This means for example that any components added or set during the `EcsPreUpdate` phase, will be merged with the main data store before the `EcsOnUpdate` phase starts. This by default limits the effects of staging to a single phase, and can improve reusability of systems as they do not need to be aware of how systems in another phase used staging.
+
+While merging after each phase is the default behavior, applications can choose to [manually merge data](#manually-merging-stages).
+
+#### Staging and threading
+Staging is the key enabler for multithreading in Flecs, as it provides a mechanism for mutating state in a thread-safe way without requiring locking. When an application is ran on multiple threads (using the `ecs_set_threads` operation) each thread receives its own private stage which the thread can read and write without having to synchronize with other threads.
+
+As a result, there are no limitations on adding/removing components, and creating/deleting entities from a thread. Invoking `ecs_add` or `ecs_set` from a thread is not significantly more expensive than calling it from a system executed on a single thread, as both use the same mechanism to prevent operations from mutating the Flecs data store while iterating. At the end of every phase, stages are merged with the main data store just like a normal iteration, with the only difference that Flecs needs to merge N stages as opposed to just a single one.
+
+This capability does not absolve applications from the responsibility of making sure access to component data is thread safe. The component data that systems receive through `ECS_COLUMN` always comes from the main Flecs store, and is shared between threads. To understand when it is safe and when it is not safe to access (and modify) this data, it is important to understand how Flecs splits up the workload for a systems.
+
+Flecs distributes load in jobs, where the number of jobs generated is equal to the number of threads, and where each job will (roughly) process `number of matched entities / number of threads` entities. This distribution is stable, meaning that in the absense of mutations, threads are guaranteed to process the same entities in subsequent iterations.
+
+With this knowledge, applications can write systems that can safely modify component values inline without having to go through the stage, as every job will only read and write the entities that are allocated to it. Things get trickier when systems _in the same phase_ access _and write_ the same components, and have _different component signatures_. Lets unpack this statement. 
+
+Each phase introduces a sychronization point for Flecs. After running systems in a phase, all threads are synchronized and data is merged. Inside the phase however, system execution is not synchronized, and different systems in that phase may (and will) run at any particular point in time. Imagine phase `EcsOnUpdate` defines systems `Foo` and `Bar` in that order, and that the systems are ran on two threads. System `Foo` writes- and system `Bar` reads data from component `A`. Suppose `Foo` subscribes for `A`, while `Bar` subscribes for `A, B`.
+
+Now suppose thread 1 finishes the `Foo` job before thread 2. In that scenario, thread 1 starts processing the job for `Bar` before thread 2 has finished processing the job for `Foo`. Because system `Bar` has a different signature than `Foo`, it is matched to different entities. This means that an entity may be processed on thread 1 for `Foo`, but on thread 2 for `Bar`. As a result the `Bar` job of thread 1 may start reading data from `A` that thread 2 is still writing, which can result in race conditions.
+
+A straightforward solution to this problem could be to put `Foo` and `Bar` in different phases. This guarantees that `Bar` can access data from `Foo` in a reliable way within the same iteration. If `Bar` however should only use data from the main store, this problem could be addressed by making `Foo` write to the stage instead. That way, changes made by `Foo` will not be visible until the next phase, and `Bar` can safely access the data from `A` inline.
+
+To take the most advantage of staging and multithreading, it is important to understand how both mechanisms work. While Flecs makes it easier to write applications in a way that allows for fast processing of data by multiple threads, applications still need to take care to prevent race conditions. Simply adding more threads with `ecs_set_threads` in an application that is not written with multithreading in mind, will almost surely result in undefined behavior.
+
+#### Manually merging stages
+By default, Flecs merges data each iteration, for each phase. While a merge is relatively cheap (especially when there is not much to merge) merging may still incur overhead when there is lots of data to merge. For certain applications with high-throughput requirements, an application may want to take control over when Flecs performs a merge.
+
+Note that this feature is still experimental, and that the API for this feature may change in the future.
+
+An application can indicate that it wants to take control of merging by calling this operation:
+
+```c
+ecs_set_automerge(world, false);
+```
+
+This will cause Flecs to stop performing automatic merges. An application now has to manually perform a merge, which it can do with this operation:
+
+```c
+ecs_merge(world);
+```
+
+To write an application that only merges each frame (as opposed to each phase) an application could do:
+
+```c
+ecs_set_automerge(world, false);
+
+while (ecs_progress(world, 1)) {
+    ecs_merge(world);
+}
+```
+
+It is even possible to merge every N frames, as the stage is retained across iterations. This also applies to applications that use multiple threads, as the stage for each thread is also maintained across iterations. An example:
+
+```c
+ecs_set_automerge(world, false);
+ecs_set_threads(world, 4);
+
+int count = 0;
+while (ecs_progress(world, 1)) {
+    // Merge every 10 frames
+    if (!(ecs_get_tick(world) % 10)) {
+        ecs_merge(world);
+    }
+}
+```
+
+There are no limitations on how the API can be used when performing merges manually, but there are some things to consider. First of all, staged data is not available as a contiguous buffer, which means that applications can only read/write it with `ecs_get` and `ecs_set`, which has a performance penalty. This is no different than when using automatic merging, but application logic has to be robust against large deltas between the main store and the stage.
+
+Another consideration is that while data within a thread can be accessed through the regular API operations, data between threads is not shared until it is merged. Thread stages are _eventually consistent_, and the delta between the thread stages can be large. Application logic will have to be made explicitly robust against this, as this is not automatic. Turning off automatic merging on an existing codebase will likely break an application.
+
+Lastly, Flecs modules rely on automatic merging (data between phases needs to be synchronized). Only if you use Flecs as a standalone library and do not use any modules, manual merging is possible.
+
+#### Limitations of staging
+The staging mechanism was adopted because it provides a fast, transparent way to manage mutations while iterating while being zero-cost when there is no data to merge. While there are no limitations on the operations you can do, there are some considerations that are common-sense once you understand the concept, but not necessarily trivial:
+
+**You cannot call ecs_progress from a system**
+When you are iterationg, you cannot start another iteration. If you need to recursively call systems, use the `ecs_run` API.
+
+**You cannot merge from a system**
+You cannot invoke `ecs_merge` when you are iterating. Merging may only be called outside of a call to `ecs_progress`.
+
+**You cannot set the number of threads from a system**
+Just don't do this.
+
+**You cannot create new systems from a system**
+Creating a new system updates administration that is used while invoking the systems.
+
+**You cannot enable/disable systems from a system**
+For the same reason you cannot create systems, you can also not enable/disable systems. It changes adminstration that is in use while iterating.
+
+**You cannot preallocate memory from a system**
+Preallocating memory directly modifies the component buffers of the main store, and thus is not possible while iterating.
+
+**ecs_count may return unreliable numbers while iterating**
+The `ecs_count` operation does not take into account staged data and only counts entities from the main store. 
+
+**You cannot make changes from an EcsOnRemove system beyond the to be removed component**
+`EcsOnRemove` systems are invoked during merging. As these systems also iterate over components, any mutations performed while in an `EcsOnRemove` system would require nested staging, which would reduce performance and increase complexity by a lot.
+
+## Modules
+Modules are a simple concept used to organize components, systems and entities into units that can be easily reused across applications, but also as a way to organize code in large applications. Modules can be located inside a project, inside a statically linked, dynamically linked, or runtime loaded library. See [good practices](#good-practices) for some tips around how to organize code in modules.
+
+### Importing modules
+The default way to import an existing module is by using the `ECS_IMPORT` macro. This will invoke the module loader that instantiates all contents of the module in the Flecs data store. After importing a module, components can be used, entities will be created and systems will be matched against any entities in the application. To import a module with `ECS_IMPORT`, do:
+
+```c
+ECS_IMPORT(world, MyModule, flags);
+```
+
+Here, `MyModule` is the module identifier. The `flags` parameter is an integer that is passed to the module loader, which allows an application to specify whether only specific parts of the module should be included. For example, a module may contain systems for moving entities in both 2D and 3D, and the application may only be interested in the 2D systems. Flecs defines a few flags out of the box, but modules are not required to use them. The application that imports the module should refer to the module documentation to find out which flags are supported. The flags defined by Flecs are:
+
+- ECS_2D
+- ECS_3D
+- ECS_REFLECTION
+
+The same module may be imported more than once without introducing duplicate definitions into the Flecs world.
+
+#### Module content handles
+To interact with module contents, the application needs handles to the content. Handles are needed to, for example, add or remove components (component handle is required) or enabling/disabling systems (system handle is required). When a module is imported, handles are automatically imported into the current application scope. In other words, if a module is imported with the `ECS_IMPORT` macro in the main function, the handles of the contents in the module will be available to code in the main function.
+
+To enable access to module handles from outside of the function in which it was imported, Flecs registers a type with the module handles as a singleton component. To obtain a struct with the module handles, an application can use the `ecs_get_singleton` operation:
+
+```c
+ecs_entity_t ecs_type(MyModule) = ecs_lookup(world, "MyModule");
+MyModule module_handles = ecs_get_singleton(world, MyModule);
+```
+
+Additionally, applications can get access to this struct with the `ecs_module()` macro after an `ECS_IMPORT`:
+
+```c
+ecs_module(MyModule); // returns struct with handles
+```
+
+The returned `MyModule` struct contains handles to the module components, but for the Flecs API to work correctly, they need to be imported in the current function scope. This will define a local variable for each handle inside the struct, which are used by the Flecs API. To do this, use the module specific `ImportHandles` macro:
+
+```c
+MyModuleImportHandles(module_handles);
+```
+
+A full code example that uses `ecs_module`:
+
+```c
+void do_stuff(ecs_world_t *world, MyModule *handles) {
+    MyModuleImportHandles(*handles);
+    return ecs_new(world, ComponentFromMyModule);
+}
+
+int main(int argc, char *argv[]) {
+    ecs_world_t *world = ecs_init();
+
+    ECS_IMPORT(world, MyModule, 0);
+
+    do_stuff(world, &ecs_module(MyModule));
+
+    ecs_fini(world);
+}
+```
+
+#### Dynamic imports
+Modules can be dynamically imported from a shared library. This is only possible when an application does not require compile-time knowledge about the contents of a module, but can be a powerful mechanism for dynamically loading functionality into an application. To dynamically load a module, applications can use the `ecs_import_from_library` function:
+
+```c
+ecs_import_from_library(world, "flecs.systems.admin", "FlecsSystemsAdmin");
+```
+
+The `flecs.systems.admin` argument is the name of the library or package. The `FlecsSystemsAdmin` argument is the name of the module, as a library may contain more than one module. If the module name is `NULL`, Flecs will automatically attempt to derive the module name from the library name. Currently this operation is only supported when Flecs is built with the bake build system, as Flecs reuses package management functions from the bake runtime. Future versions of Flecs will support this functionality for other build systems as well.
+
+### Creating modules
+A few steps are required to create a module from scratch:
+
+- Create a type which contains the _public_ handles
+- Create a function that instantiates the module contents
+- Create a macro that declares handle variables
+
+These steps all have to conform to a specific naming convention of them to work correctly. Fortunately, For each of these steps, Flecs has convenience macro's that simplify this process.
+
+Suppose a module called `MyTransformModule` defines a component called `Position`. First of all, we have to create a struct that exposes the handle to `Position`. To do this, create the following struct in a publicly available header of the module:
+
+```c
+typedef struct MyTransformModuleHandles {
+    ECS_DECLARE_COMPONENT(Position);
+} MyTransformModuleHandles;
+```
+
+Make sure that the struct name is the module name (`MyTransformModule`) plus `Handles`. In that same header, a function must be declared that will be responsible for importing the module contents into Flecs:
+
+```c
+void MyTransformModuleImport(ecs_world_t *world, int flags);
+```
+
+Again, make sure that the name of the function is the module name plus `Import`, and that it follows this exact function signature. Now we need to create a macro that declares handle variables. This macro is used by the `ECS_IMPORT` macro to make the `Position` handle available to the application function where this module is imported. Creating this macro is straightforward, and looks like this:
+
+```c
+#define MyTransformModuleImportHandles(handles)\
+    ECS_IMPORT_COMPONENT(handles, Position)
+```
+
+When this macro is invoked by `ECS_IMPORT`, it will receive an initialized instance to the `MyTransformModuleHandles` struct.
+
+Lastly, the function that imports the contents into Flecs needs to be created. This function needs to accomplish a few things, outlined in this example:
+
+```c
+void MyTransformModuleImport(ecs_world_t *world, int flags)
+{
+    // Create the module in Flecs
+    ECS_MODULE(world, MyTransformModule);
+
+    // Create the component
+    ECS_COMPONENT(world, Position);
+
+    // Export the component
+    ECS_EXPORT_COMPONENT(Position);
+}
+```
+
+With that in place, an application can now use `ECS_IMPORT` to import the module:
+
+```c
+ECS_IMPORT(world, MyTransformModule, 0);
+```
+
+When a module defines other kinds of things besides components, a different set of macro's is used. The following code needs to be added to a header of a module that exports a system:
+
+```c
+// To declare a system handle, use ECS_DECLARE_ENTITY
+typedef struct MyTransformModuleHandles {
+    ECS_DECLARE_COMPONENT(Position);
+    ECS_DECLARE_ENTITY(MySystem);
+} MyTransformModuleHandles;
+
+// This does not change
+void MyTransformModuleImport(ecs_world_t *world, int flags);
+
+// To import a system handle, use ECS_IMPORT_ENTITY 
+#define MyTransformModuleImportHandles(handles)\
+    ECS_IMPORT_COMPONENT(handles, Position)\
+    ECS_IMPORT_ENTITY(handles, MySystem)
+```
+
+The `MyTransformModuleImport` function then needs to be changed to this:
+
+```c
+void MyTransformModuleImport(ecs_world_t *world, int flags)
+{
+    // Create the module in Flecs
+    ECS_MODULE(world, MyTransformModule);
+    
+    // Create the component
+    ECS_COMPONENT(world, Position);
+
+    // Create the component
+    ECS_SYSTEM(world, MySystem, EcsOnUpdate, Position);
+
+    // Export the component
+    ECS_EXPORT_COMPONENT(Position);
+
+    // Export the system
+    ECS_EXPORT_ENTITY(MySystem);
+}
+```
+
+Prefabs, types and tags can all be exported with the ECS_EXPORT_ENTITY macro.
+
+### Internals
+There is a lot of variation between different ECS frameworks. As with any data structure or library, understanding the characteristics of a particular implementation will let you write code that runs faster, occupies less memory and behaves more predictably. This section is interesting for someone who already knows how to write ECS code, but wants to know more about what Flecs does behind the scenes.
+
+#### Archetypes
+Flecs is a variation of a so called "archetype" based entity component system. The name "archetypes" is used to indicate that entities that have the same "type" are stored together, where a type is the set of components an entity has. Types are created dynamically, based on the components an application adds and removes from entities. A simple example: consider an application with 10 entities containing `[Position]`, and 10 entities containing `[Position, Velocity]`. `[Position]` and `[Position, Velocity]` are the two archetypes, and entities belonging to the same archetype are stored together. In practice, the actual storage will look something like this:
+
+```c
+struct Archetype1 {
+    Position position[10];
+};
+
+struct Archetype2 {
+    Position position[10];
+    Velocity velocity[10];
+};
+```
+
+This approach to storing data is often referred to as "structs of arrays", or SoA. There are several advantages and disadvantages to storing entities this way. Lets start with the biggest benefit: entity data can always be stored in tightly packed arrays, which allows for efficient loading of data from RAM into the CPU caches. As the index for an entity is the same for each component array, it is easy and cheap to iterate over multiple components at the same time.
+
+Archetype-based implementations are unique in that they guarantee direct array access for any combination of entities and components. Other approaches to implementing an ECS have either arrays with gaps, or have arrays where components for one entity are stored on different indices. These approaches rely on additional data structures to find the set of components for a specific entity. Hybrid approaches exist such as EnTT groups, which rely on sorting entities with a certain archetype to offer direct array access.
+
+There are two noteworthy downsides to using archetypes that cannot be avoided. The first one is that when components are added and removed to an entity, it has to be moved from one archetype to another archetype, which involves copying memory between arrays. The second downside is that in applications with lots of different combinations of components, the large number of archetypes creates many arrays for the same component, which fragments the data space. Excessive fragmentation is bad, as each time an application has to switch from one array to another, it is likely to incur a cache miss.
+
+These downsides can be easily mitigated once understood. Applications should avoid frequently adding/removing components to entities with lots of data. In such cases, performance can be hugely improved by splitting components over multiple entities. Fragmentation is seldomly a problem except in extreme cases, where there is only a handful of entities per archetype, and there are hundreds, if not thousands of archetypes that share the same component(s).
+
+When properly used, archetypes based implementations are easily one of the fastest ways to implement an Entity Component System. Their ability to self-organize the entity storage for speed makes it easy to write applications that perform well. This combination of speed and usability is why Flecs has adopted the archetypes-based approach.
+
+#### System internals
+In an archetypes-based implementation, systems are matched with a set of archetypes that matches a system interest expression. Flecs systems are no exception to this rule. When a system is created in Flecs, it is matched with the existing archetypes. The matching archetypes are stored in administration that belongs to the system, so that when the system is invoked, there is no need to perform the matching again. When new archetypes are created, they are matched with the existing systems, so that at any point in time, each system has the full set of matching archetypes independent of the order in which they are defined.
+
+Systems in Flecs keep track of which archetypes are empty and which archetypes are not. Empty archetypes are marked as inactive by systems so that they are not evaluated in the main loop. This improves performance as there often can be empty archetypes that served as an intermediate, if multiple components were added or removed from an entity.
+
+Similarly, Flecs keeps track of systems that have no matching entities. If a system does not match with any archetypes, or all of its archetypes are empty, the system is marked as inactive which will also cause Flecs to not evaluate it in the `ecs_progress` call. This is particularly useful, as Flecs modules can define many systems that are not active, and may never be active for the set of entities in an application.
+
+#### Type internals
+Types in Flecs are the data structure that describes a set of components, or more accurately, a set of _entities_. Types are a simple yet powerful mechanism in Flecs that enables many features, from plain ECS, to hierarchies, to shared components. Understanding how to use types can greatly improve efficiency of code, and will let applications do things that are ordinarily not possible in ECS frameworks.
+
+An example of a type is `[Position, Velocity]`. They are internally stored as a vector (`ecs_vector_t`) where the element type is an entity id (`ecs_entity_t`). Components in Flecs are stored as entities with the `EcsComponent` component. This causes their handle to be of the `ecs_entity_t` type, and as a result, types are vectors of `ecs_entity_t`. The type of an entity dynamically changes when components are added and removed from an entity.
+
+Because the elements in a type are of `ecs_entity_t`, it is possible to add regular entities, instead of just components, to a type. When a regular entity is added to a type, it will act as a component without data, which is equivalent to a tag. Entities in a type can however be annotated with a so called "type flag". A type flag indicates a special kind of role that the entity in a type has. Flecs uses this role to indicate if an entity is used as a parent or as a base.
+
+There are currently two type flags in Flecs: `CHILDOF` and `INSTANCEOF`. The values of these flags are single bits, starting from the MSB and counting backwards. This makes the addressing space for type flags limited: with each new flag the entity addressing space is halved. However, since the `ecs_entity_t` type is a 64-bit integer, this will not quickly become an issue.
+
+A type with a `CHILDOF` flag could look like `[Position, Velocity, CHILDOF | my_parent]`, where `my_parent` can be any regular entity. This indicates to Flecs that `my_parent` should be treated as a parent of entities of this type. This knowledge is used to optimize storage for hierarchies, and to implement certain features like `CONTAINER` and `CASCADE` columns in queries (see [Hierarchies](#hierarches)).
+
+Similarly, a type with an `INSTANCEOF` flag looks like `[Position, Velocity, INSTANCEOF | my_base]`, where `my_base` can be any regular entity. This indicates to flecs that components of `my_base` should be shared with entities of this type (see [Inheritance](#inheritance)).
+
+Types are like the DNA of entities. They are used extensively throughout application and Flecs code, and provide a cheap mechanism for learning everything there is to know about a specific entity.
+
+#### Entity internals
+Entities are stored in archetypes which lets them to be iterated with systems, but that does not allow them to be accessed randomly. For example, an application may want to get or set component values on one specific entity using the `ecs_get` or `ecs_set` APIs. To enable this functionality, Flecs has the entity index, which is a data structure that maps entity identifiers to where they are stored in an archetype.
+
+In Flecs the entity index is implemented as a sparse set, where the entity identifier is the index in the sparse array. The dense array of the sparse set is used to test if an entity identifier is alive, and allows for iterating all entities. The data stored in the sparse set is a pointer to the archetype the entity is stored in, combined with an _row_ (array index) that points to where in the component arrays the entity is stored.
+
+Flecs has a mechanism whereby it can monitor specific entities for changes. This is required for ensuring that the set of archetypes matched with systems that have `CONTAINER` columns remains correct and up to date. For example, a system with `CONTAINER.Position` column can unmatch a previously matched archetype when the `Position` component is removed from one of the parents of the entities matched with the system. It would be expensive to reevaluate matched archetypes after updating _any_ entity, so instead Flecs needs a mechanism to monitor specific entities for updates. Monitored entities are stored with a negative row in the entity index. The actual index of an entity can be found by multiplying the row with -1. This allows Flecs to monitor entities for changes efficiently without having to do additional lookups.
+
+Systems will occasionally need access to the entity identifier. Because systems access the entities directly from the archetypes and not from the entity index, they need to obtain the entity identifier in another way. Flecs accomplishes this by storing the entity identifiers as an additional column columns in an archetype. Applications can access the entity identifiers using `row->entities`, or by requesting the column at index 0:
+
+```c
+ECS_COLUMN(rows, ecs_entity_t, entities, 0);
+```
+
+### Operating system abstraction API
+Flecs relies on functionality that is not standardized across platforms, like threading and measuring high resolution time. While the essential features of Flecs work out of the box, some of its features require additional effort. To keep Flecs as portable as possible, it does not contain any platform-specific API calls. Instead, it requires the application to provide them.
+
+Note that when Flecs is built with bake, it automatically uses the platform specific API from the bake runtime. Applications do not need to manually set these, unless they want to provide their own implementations.
+
+The OS API is defined by a struct in `util/os_api.h`. The default pattern for providing custom abstraction functions is:
+
+```c
+// Set default calls, like malloc, free
+ecs_os_set_api_defaults();
+
+// Obtain a private writable copy of the os_api struct
+ecs_os_api_t os_api = ecs_os_api;
+
+// Override any calls
+os_api.thread_new = my_thread_new;
+os_api.thread_join = my_thread_join;
+
+// Set the custom API callbacks
+ecs_os_set_api(&os_api);
+```
+
+These APIs callbacks are set automatically when calling `ecs_os_set_api_defaults`:
+
+- malloc
+- free
+- realloc
+- calloc
+- log
+- log_error
+- log_debug
+- abort
+
+When Flecs is built with bake, these additional API callbacks are set to the corresponding functions from the bake runtime:
+
+- thread_new
+- thread_join
+- mutex_new
+- mutex_free
+- mutex_lock
+- mutex_unlock
+- cond_new
+- cond_free
+- cond_signal
+- cond_broadcast
+- cond_wait
+- sleep
+- get_time

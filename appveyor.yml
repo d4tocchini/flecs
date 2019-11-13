@@ -14,8 +14,10 @@ init:
 
     cd ..\
 
-    bake.exe setup
+    bake.exe setup --local
 
+    set PATH=%USERPROFILE%\bake;%PATH%
+    
     cd ..\flecs
 
 build_script:

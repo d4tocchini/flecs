@@ -6,29 +6,33 @@
  * ----------------------------------------------------------------------------
  */
 
-#include <include/collections.h>
+#include <collections.h>
 
-// Testsuite 'Array'
-void Array_setup(void);
-void Array_free_empty(void);
-void Array_count(void);
-void Array_count_empty(void);
-void Array_get(void);
-void Array_get_first(void);
-void Array_get_last(void);
-void Array_get_empty(void);
-void Array_get_out_of_bound(void);
-void Array_add_empty(void);
-void Array_add_resize(void);
-void Array_remove(void);
-void Array_remove_first(void);
-void Array_remove_last(void);
-void Array_remove_empty(void);
-void Array_remove_all(void);
-void Array_remove_out_of_bound(void);
-void Array_sort_rnd(void);
-void Array_sort_sorted(void);
-void Array_sort_empty(void);
+// Testsuite 'Vector'
+void Vector_setup(void);
+void Vector_free_empty(void);
+void Vector_count(void);
+void Vector_count_empty(void);
+void Vector_get(void);
+void Vector_get_first(void);
+void Vector_get_last(void);
+void Vector_get_empty(void);
+void Vector_get_out_of_bound(void);
+void Vector_add_empty(void);
+void Vector_add_resize(void);
+void Vector_remove(void);
+void Vector_remove_first(void);
+void Vector_remove_last(void);
+void Vector_remove_empty(void);
+void Vector_remove_all(void);
+void Vector_remove_out_of_bound(void);
+void Vector_sort_rnd(void);
+void Vector_sort_sorted(void);
+void Vector_sort_empty(void);
+void Vector_size_of_null(void);
+void Vector_remove_index_w_move(void);
+void Vector_set_size_smaller_than_count(void);
+void Vector_pop_elements(void);
 
 // Testsuite 'Map'
 void Map_setup(void);
@@ -47,94 +51,129 @@ void Map_iter_zero_buckets(void);
 void Map_remove(void);
 void Map_remove_empty(void);
 void Map_remove_unknown(void);
+void Map_grow(void);
+
+// Testsuite 'Chunked'
+void Chunked_setup(void);
+void Chunked_add_1(void);
+void Chunked_add_1_to_empty(void);
+void Chunked_add_1_chunk_size_1(void);
+void Chunked_add_n(void);
+void Chunked_add_n_chunk_size_1(void);
+void Chunked_remove(void);
+void Chunked_remove_first(void);
+void Chunked_remove_last(void);
+void Chunked_remove_all(void);
+void Chunked_remove_all_n_chunks(void);
+void Chunked_clear_1(void);
+void Chunked_clear_empty(void);
+void Chunked_clear_n(void);
+void Chunked_clear_n_chunks(void);
+void Chunked_memory_null(void);
 
 static bake_test_suite suites[] = {
     {
-        .id = "Array",
-        .testcase_count = 19,
-        .setup = Array_setup,
+        .id = "Vector",
+        .testcase_count = 23,
+        .setup = Vector_setup,
         .testcases = (bake_test_case[]){
             {
                 .id = "free_empty",
-                .function = Array_free_empty
+                .function = Vector_free_empty
             },
             {
                 .id = "count",
-                .function = Array_count
+                .function = Vector_count
             },
             {
                 .id = "count_empty",
-                .function = Array_count_empty
+                .function = Vector_count_empty
             },
             {
                 .id = "get",
-                .function = Array_get
+                .function = Vector_get
             },
             {
                 .id = "get_first",
-                .function = Array_get_first
+                .function = Vector_get_first
             },
             {
                 .id = "get_last",
-                .function = Array_get_last
+                .function = Vector_get_last
             },
             {
                 .id = "get_empty",
-                .function = Array_get_empty
+                .function = Vector_get_empty
             },
             {
                 .id = "get_out_of_bound",
-                .function = Array_get_out_of_bound
+                .function = Vector_get_out_of_bound
             },
             {
                 .id = "add_empty",
-                .function = Array_add_empty
+                .function = Vector_add_empty
             },
             {
                 .id = "add_resize",
-                .function = Array_add_resize
+                .function = Vector_add_resize
             },
             {
                 .id = "remove",
-                .function = Array_remove
+                .function = Vector_remove
             },
             {
                 .id = "remove_first",
-                .function = Array_remove_first
+                .function = Vector_remove_first
             },
             {
                 .id = "remove_last",
-                .function = Array_remove_last
+                .function = Vector_remove_last
             },
             {
                 .id = "remove_empty",
-                .function = Array_remove_empty
+                .function = Vector_remove_empty
             },
             {
                 .id = "remove_all",
-                .function = Array_remove_all
+                .function = Vector_remove_all
             },
             {
                 .id = "remove_out_of_bound",
-                .function = Array_remove_out_of_bound
+                .function = Vector_remove_out_of_bound
             },
             {
                 .id = "sort_rnd",
-                .function = Array_sort_rnd
+                .function = Vector_sort_rnd
             },
             {
                 .id = "sort_sorted",
-                .function = Array_sort_sorted
+                .function = Vector_sort_sorted
             },
             {
                 .id = "sort_empty",
-                .function = Array_sort_empty
+                .function = Vector_sort_empty
+            },
+            {
+                .id = "size_of_null",
+                .function = Vector_size_of_null
+            },
+            {
+                .id = "remove_index_w_move",
+                .function = Vector_remove_index_w_move
+            },
+            {
+                .id = "set_size_smaller_than_count",
+                .function = Vector_set_size_smaller_than_count
+            },
+            {
+                .id = "pop_elements",
+                .function = Vector_pop_elements
             }
         }
     },
     {
         .id = "Map",
-        .testcase_count = 15,
+        .testcase_count = 16,
         .setup = Map_setup,
         .testcases = (bake_test_case[]){
             {
@@ -196,6 +235,77 @@ static bake_test_suite suites[] = {
             {
                 .id = "remove_unknown",
                 .function = Map_remove_unknown
+            },
+            {
+                .id = "grow",
+                .function = Map_grow
+            }
+        }
+    },
+    {
+        .id = "Chunked",
+        .testcase_count = 15,
+        .setup = Chunked_setup,
+        .testcases = (bake_test_case[]){
+            {
+                .id = "add_1",
+                .function = Chunked_add_1
+            },
+            {
+                .id = "add_1_to_empty",
+                .function = Chunked_add_1_to_empty
+            },
+            {
+                .id = "add_1_chunk_size_1",
+                .function = Chunked_add_1_chunk_size_1
+            },
+            {
+                .id = "add_n",
+                .function = Chunked_add_n
+            },
+            {
+                .id = "add_n_chunk_size_1",
+                .function = Chunked_add_n_chunk_size_1
+            },
+            {
+                .id = "remove",
+                .function = Chunked_remove
+            },
+            {
+                .id = "remove_first",
+                .function = Chunked_remove_first
+            },
+            {
+                .id = "remove_last",
+                .function = Chunked_remove_last
+            },
+            {
+                .id = "remove_all",
+                .function = Chunked_remove_all
+            },
+            {
+                .id = "remove_all_n_chunks",
+                .function = Chunked_remove_all_n_chunks
+            },
+            {
+                .id = "clear_1",
+                .function = Chunked_clear_1
+            },
+            {
+                .id = "clear_empty",
+                .function = Chunked_clear_empty
+            },
+            {
+                .id = "clear_n",
+                .function = Chunked_clear_n
+            },
+            {
+                .id = "clear_n_chunks",
+                .function = Chunked_clear_n_chunks
+            },
+            {
+                .id = "memory_null",
+                .function = Chunked_memory_null
             }
         }
     }
@@ -203,5 +313,5 @@ static bake_test_suite suites[] = {
 
 int main(int argc, char *argv[]) {
     ut_init(argv[0]);
-    return bake_test_run("collections", argc, argv, suites, 2);
+    return bake_test_run("collections", argc, argv, suites, 3);
 }

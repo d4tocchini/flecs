@@ -1,6 +1,6 @@
-#include <ctype.h>
-#include <string.h>
-#include "include/private/flecs.h"
+#include "flecs_private.h"
+
+#define ECS_ANNOTATION_LENGTH_MAX (16)
 
 /** Skip spaces when parsing signature */
 static
@@ -17,26 +17,20 @@ const char *skip_space(
 static
 char* parse_complex_elem(
     char *bptr,
-    EcsSystemExprElemKind *elem_kind,
-    EcsSystemExprOperKind *oper_kind,
+    ecs_system_expr_elem_kind_t *elem_kind,
+    ecs_system_expr_oper_kind_t *oper_kind,
     const char * *source)
 {
     if (bptr[0] == '!') {
         *oper_kind = EcsOperNot;
         if (!bptr[1]) {
-            ecs_abort(ECS_INVALID_COMPONENT_EXPRESSION, bptr);
+            ecs_abort(ECS_INVALID_EXPRESSION, bptr);
         }
         bptr ++;
     } else if (bptr[0] == '?') {
         *oper_kind = EcsOperOptional;
         if (!bptr[1]) {
-            ecs_abort(ECS_INVALID_COMPONENT_EXPRESSION, bptr);
-        }
-        bptr ++;
-    } else if (bptr[0] == '$') {
-        *elem_kind = EcsFromSingleton;
-        if (!bptr[1]) {
-            ecs_abort(ECS_INVALID_COMPONENT_EXPRESSION, bptr);
+            ecs_abort(ECS_INVALID_EXPRESSION, bptr);
         }
         bptr ++;
     }
@@ -45,22 +39,29 @@ char* parse_complex_elem(
 
     char *dot = strchr(bptr, '.');
     if (dot) {
-        if (!strncmp(bptr, "CONTAINER", dot - bptr)) {
+        if (bptr == dot) {
+            *elem_kind = EcsFromEmpty;
+        } else if (!strncmp(bptr, "CONTAINER", dot - bptr)) {
             *elem_kind = EcsFromContainer;
         } else if (!strncmp(bptr, "SYSTEM", dot - bptr)) {
             *elem_kind = EcsFromSystem;
-        } else if (!strncmp(bptr, "ENTITY", dot - bptr)) {
+        } else if (!strncmp(bptr, "SELF", dot - bptr)) {
             /* default */
-        } else if (!strncmp(bptr, "ID", dot - bptr)) {
-            *elem_kind = EcsFromId;
+        } else if (!strncmp(bptr, "OWNED", dot - bptr)) {
+            *elem_kind = EcsFromOwned;
+        } else if (!strncmp(bptr, "SHARED", dot - bptr)) {
+            *elem_kind = EcsFromShared;
+        } else if (!strncmp(bptr, "CASCADE", dot - bptr)) {
+            *elem_kind = EcsCascade;   
         } else {
             *elem_kind = EcsFromEntity;
             *source = bptr;
         }
+        
         bptr = dot + 1;
 
         if (!bptr[0]) {
-            ecs_abort(ECS_INVALID_COMPONENT_EXPRESSION, bptr);
+            return NULL;
         }
     }
 
@@ -70,19 +71,25 @@ char* parse_complex_elem(
 static
 int has_tables(
     ecs_world_t *world,
-    EcsSystemExprElemKind elem_kind,
-    EcsSystemExprOperKind oper_kind,
+    ecs_system_expr_elem_kind_t elem_kind,
+    ecs_system_expr_oper_kind_t oper_kind,
+    ecs_system_expr_inout_kind_t inout_kind,
     const char *component_id,
     const char *source_id,
     void *data)
 {
     (void)world;
     (void)oper_kind;
+    (void)inout_kind;
     (void)component_id;
     (void)source_id;
     
     bool *needs_matching = data;
-    if (elem_kind == EcsFromSelf || elem_kind == EcsFromContainer) {
+    if (elem_kind == EcsFromSelf || 
+        elem_kind == EcsFromOwned ||
+        elem_kind == EcsFromShared ||
+        elem_kind == EcsFromContainer) 
+    {
         *needs_matching = true;
     }
 
@@ -115,6 +122,55 @@ uint32_t ecs_columns_count(
     return count;
 }
 
+static
+const char* parse_annotation(
+    const char *ptr, 
+    ecs_system_expr_inout_kind_t *inout_kind_out)
+{
+    char *bptr, buffer[ECS_ANNOTATION_LENGTH_MAX + 1];
+    char ch;
+
+    ptr = skip_space(ptr);
+
+    for (bptr = buffer; (ch = ptr[0]); ptr ++) {        
+        if (ch == ',' || ch == ']') {
+            /* Even though currently only one simultaneous annotation is 
+             * useful, more annotations may be added in the future. */
+            bptr[0] = '\0';
+
+            if (!strcmp(buffer, "in")) {
+                *inout_kind_out = EcsIn;
+            } else if (!strcmp(buffer, "out")) {
+                *inout_kind_out = EcsOut;
+            } else if (!strcmp(buffer, "inout")) {
+                *inout_kind_out = EcsInOut;
+            }
+
+            if (ch == ']') {
+                break;
+            } else {
+                ptr = skip_space(ptr + 1);
+            }
+
+            bptr = buffer;
+        } else {
+            if (bptr - buffer >= ECS_ANNOTATION_LENGTH_MAX) {
+                return NULL;
+            }
+
+            bptr[0] = ch;
+            bptr ++;
+        }
+    }
+
+    if (!ch) {
+        /* Annotation expression cannot be end of column expression */
+        return NULL;
+    }
+
+    return ptr;
+}
+
 /** Parse component expression */
 int ecs_parse_component_expr(
     ecs_world_t *world,
@@ -128,17 +184,36 @@ int ecs_parse_component_expr(
     ecs_assert(buffer != NULL, ECS_OUT_OF_MEMORY, NULL);
 
     bool complex_expr = false;
-    EcsSystemExprElemKind elem_kind = EcsFromSelf;
-    EcsSystemExprOperKind oper_kind = EcsOperAnd;
+    bool prev_is_0 = false;
+    ecs_system_expr_elem_kind_t elem_kind = EcsFromSelf;
+    ecs_system_expr_oper_kind_t oper_kind = EcsOperAnd;
+    ecs_system_expr_inout_kind_t inout_kind = EcsInOut;
     const char *source;
 
     for (bptr = buffer, ch = sig[0], ptr = sig; ch; ptr++) {
         ptr = skip_space(ptr);
         ch = *ptr;
 
-        if (ch == ',' || ch == '|' || ch == '\0') {
+        if (prev_is_0) {
+            /* 0 can only apppear by itself */
+            ecs_abort(ECS_INVALID_SIGNATURE, sig);
+        }
+
+        if (ch == '[') {
+            /* Annotations should appear at the beginning of a column */
+            if (bptr != buffer) {
+                ecs_abort(ECS_INVALID_SIGNATURE, sig);
+            }
+
+            ptr = parse_annotation(ptr + 1, &inout_kind);
+            if (!bptr) {
+                ecs_abort(ECS_INVALID_SIGNATURE, sig);
+            }
+        
+        } else if (ch == ',' || ch == '|' || ch == '\0') {
+            /* Separators should not appear after an empty column */
             if (bptr == buffer) {
-                ecs_abort(ECS_INVALID_COMPONENT_EXPRESSION, sig);
+                ecs_abort(ECS_INVALID_SIGNATURE, sig);
             }
 
             *bptr = '\0';
@@ -147,29 +222,32 @@ int ecs_parse_component_expr(
             source = NULL;
 
             if (complex_expr) {
+                ecs_system_expr_oper_kind_t prev_oper_kind = oper_kind;
                 bptr = parse_complex_elem(bptr, &elem_kind, &oper_kind, &source);
                 if (!bptr) {
-                    ecs_abort(ECS_INVALID_COMPONENT_EXPRESSION, sig);
+                    ecs_abort(ECS_INVALID_EXPRESSION, sig);
+                }
+
+                if (oper_kind == EcsOperNot && prev_oper_kind == EcsOperOr) {
+                    ecs_abort(ECS_INVALID_EXPRESSION, sig);
                 }
             }
 
-            if (oper_kind == EcsOperNot && ch == '|') {
-                /* Cannot combine OR and NOT */
-                ecs_abort(ECS_INVALID_COMPONENT_EXPRESSION, sig);
-            }
+           if (oper_kind == EcsOperOr) {
+                if (elem_kind == EcsFromEmpty) {
+                    /* Cannot OR handles */
+                    ecs_abort(ECS_INVALID_EXPRESSION, sig);
+                }
+            }            
 
             if (!strcmp(bptr, "0")) {
-                if (oper_kind != EcsOperAnd) {
-                    /* Cannot combine 0 component with operators */
-                    ecs_abort(ECS_INVALID_COMPONENT_EXPRESSION, sig);
+                if (bptr != buffer) {
+                    /* 0 can only appear by itself */
+                    ecs_abort(ECS_INVALID_EXPRESSION, sig);
                 }
 
-                if (elem_kind != EcsFromSelf) {
-                    /* Cannot get 0 component from anything other than entity */
-                    ecs_abort(ECS_INVALID_COMPONENT_EXPRESSION, sig);
-                }
-
-                elem_kind = EcsFromId;
+                elem_kind = EcsFromEmpty;
+                prev_is_0 = true;
             }
 
             char *source_id = NULL;
@@ -182,33 +260,35 @@ int ecs_parse_component_expr(
                 source_id[dot - source] = '\0';
             }
 
-            if (action(world, elem_kind, oper_kind, bptr, source_id, ctx) != 0) {
-                ecs_abort(ECS_INVALID_COMPONENT_EXPRESSION, sig);
+            int ret;
+            if ((ret = action(
+                world, elem_kind, oper_kind, inout_kind, bptr, source_id, ctx))) 
+            {
+                ecs_abort(ret, sig);
             }
 
             if (source_id) {
                 ecs_os_free(source_id);
             }
 
+            /* Reset variables for next column */
             complex_expr = false;
             elem_kind = EcsFromSelf;
 
             if (ch == '|') {
-                if (elem_kind == EcsFromId) {
-                    /* Cannot OR handles */
-                    ecs_abort(ECS_INVALID_COMPONENT_EXPRESSION, sig);
-                }
                 oper_kind = EcsOperOr;
             } else {
                 oper_kind = EcsOperAnd;
             }
+
+            inout_kind = EcsInOut;
 
             bptr = buffer;
         } else {
             *bptr = ch;
             bptr ++;
 
-            if (ch == '.' || ch == '!' || ch == '?' || ch == '$') {
+            if (ch == '.' || ch == '!' || ch == '?') {
                 complex_expr = true;
             }
         }

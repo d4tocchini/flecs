@@ -1,11 +1,11 @@
-#include <include/api.h>
+#include <api.h>
 
 void New_empty() {
     ecs_world_t *world = ecs_init();
 
     ecs_entity_t e = ecs_new(world, 0);
     test_assert(e != 0);
-    test_assert(ecs_empty(world, e));
+    test_assert(ecs_is_empty(world, e));
 
     ecs_fini(world);
 }
@@ -74,6 +74,7 @@ void New_type_w_2_types() {
     ECS_TYPE(world, Type_3, Type_1, Type_2);
 
     ecs_entity_t e = ecs_new(world, Type_3);
+
     test_assert(e != 0);
     test_assert(ecs_has(world, e, Position));
     test_assert(ecs_has(world, e, Velocity));
@@ -156,3 +157,23 @@ void New_type_w_tag_mixed() {
     ecs_fini(world);
 }
 
+void New_redefine_component() {
+    ecs_world_t *world = ecs_init();
+
+    ecs_entity_t c = 0;
+    ecs_type_t t = NULL;
+
+    {
+        ECS_COMPONENT(world, Position);
+        c = ecs_entity(Position);
+        t = ecs_type(Position);
+    }
+
+    {
+        ECS_COMPONENT(world, Position);
+        test_assert(c == ecs_entity(Position));
+        test_assert(t == ecs_type(Position));
+    }
+    
+    ecs_fini(world);
+}

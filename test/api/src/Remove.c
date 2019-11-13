@@ -1,4 +1,4 @@
-#include <include/api.h>
+#include <api.h>
 
 void Remove_zero() {
     ecs_world_t *world = ecs_init();
@@ -7,7 +7,7 @@ void Remove_zero() {
     test_assert(e != 0);
 
     ecs_remove(world, e, 0);
-    test_assert(ecs_empty(world, e));
+    test_assert(ecs_is_empty(world, e));
     
     ecs_fini(world);
 }

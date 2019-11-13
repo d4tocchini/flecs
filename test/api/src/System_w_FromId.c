@@ -1,8 +1,8 @@
-#include <include/api.h>
+#include <api.h>
 
 static
 void Iter(ecs_rows_t *rows) {
-    Position *p = ecs_column(rows, Position, 1);
+    ECS_COLUMN(rows, Position, p, 1);
 
     ProbeSystem(rows);
 
@@ -19,7 +19,7 @@ void System_w_FromId_2_column_1_from_id() {
     ECS_COMPONENT(world, Position);
     ECS_COMPONENT(world, Velocity);
 
-    ECS_SYSTEM(world, Iter, EcsOnUpdate, Position, ID.Velocity);
+    ECS_SYSTEM(world, Iter, EcsOnUpdate, Position, .Velocity);
 
     SysTestData ctx = {0};
     ecs_set_context(world, &ctx);
@@ -35,9 +35,9 @@ void System_w_FromId_2_column_1_from_id() {
     test_null(ctx.param);
 
     test_int(ctx.e[0], e);
-    test_int(ctx.c[0][0], ecs_to_entity(Position));
+    test_int(ctx.c[0][0], ecs_entity(Position));
     test_int(ctx.s[0][0], 0);
-    test_int(ctx.c[0][1], ecs_to_entity(Velocity));
+    test_int(ctx.c[0][1], ecs_entity(Velocity));
     test_int(ctx.s[0][1], 0);
 }
 
@@ -48,7 +48,7 @@ void System_w_FromId_3_column_2_from_id() {
     ECS_COMPONENT(world, Velocity);
     ECS_COMPONENT(world, Rotation);
 
-    ECS_SYSTEM(world, Iter, EcsOnUpdate, Position, ID.Velocity, ID.Rotation);
+    ECS_SYSTEM(world, Iter, EcsOnUpdate, Position, .Velocity, .Rotation);
 
     SysTestData ctx = {0};
     ecs_set_context(world, &ctx);
@@ -64,11 +64,11 @@ void System_w_FromId_3_column_2_from_id() {
     test_null(ctx.param);
 
     test_int(ctx.e[0], e);
-    test_int(ctx.c[0][0], ecs_to_entity(Position));
+    test_int(ctx.c[0][0], ecs_entity(Position));
     test_int(ctx.s[0][0], 0);
-    test_int(ctx.c[0][1], ecs_to_entity(Velocity));
+    test_int(ctx.c[0][1], ecs_entity(Velocity));
     test_int(ctx.s[0][1], 0);
-    test_int(ctx.c[0][2], ecs_to_entity(Rotation));
+    test_int(ctx.c[0][2], ecs_entity(Rotation));
     test_int(ctx.s[0][2], 0);    
 }
 
@@ -76,7 +76,7 @@ static
 void CheckColumnType(ecs_rows_t *rows) {
     ECS_COLUMN_COMPONENT(rows, Position, 2);
 
-    test_assert(ecs_to_type(Position) == ecs_column_type(rows, 1));
+    test_assert(ecs_type(Position) == ecs_column_type(rows, 1));
 
     ProbeSystem(rows);
 }
@@ -88,7 +88,7 @@ void System_w_FromId_column_type() {
     ECS_COMPONENT(world, Velocity);
     ECS_COMPONENT(world, Rotation);
 
-    ECS_SYSTEM(world, CheckColumnType, EcsOnUpdate, Position, ID.Position);
+    ECS_SYSTEM(world, CheckColumnType, EcsOnUpdate, Position, .Position);
 
     SysTestData ctx = {0};
     ecs_set_context(world, &ctx);

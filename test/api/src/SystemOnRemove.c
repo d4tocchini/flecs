@@ -1,8 +1,12 @@
-#include <include/api.h>
+#include <api.h>
 
 void Deinit(ecs_rows_t *rows) {
-    Position *p = ecs_column(rows, Position, 1);
-    Velocity *v = ecs_column_test(rows, Velocity, 2);
+    ECS_COLUMN(rows, Position, p, 1);
+
+    Velocity *v = NULL;
+    if (rows->column_count >= 2) {
+        v = ecs_column(rows, Velocity, 2);
+    }
 
     ProbeSystem(rows);
 
@@ -40,7 +44,7 @@ void SystemOnRemove_remove_match_1_of_1() {
     test_null(ctx.param);
 
     test_int(ctx.e[0], e);
-    test_int(ctx.c[0][0], ecs_to_entity(Position));
+    test_int(ctx.c[0][0], ecs_entity(Position));
     test_int(ctx.s[0][0], 0);
 
     ecs_fini(world);
@@ -69,7 +73,7 @@ void SystemOnRemove_remove_match_1_of_2() {
     test_null(ctx.param);
 
     test_int(ctx.e[0], e);
-    test_int(ctx.c[0][0], ecs_to_entity(Position));
+    test_int(ctx.c[0][0], ecs_entity(Position));
     test_int(ctx.s[0][0], 0);
 
     ecs_fini(world);
@@ -98,9 +102,9 @@ void SystemOnRemove_remove_match_2_of_2() {
     test_null(ctx.param);
 
     test_int(ctx.e[0], e);
-    test_int(ctx.c[0][0], ecs_to_entity(Position));
+    test_int(ctx.c[0][0], ecs_entity(Position));
     test_int(ctx.s[0][0], 0);
-    test_int(ctx.c[0][1], ecs_to_entity(Velocity));
+    test_int(ctx.c[0][1], ecs_entity(Velocity));
     test_int(ctx.s[0][1], 0);
 
     ecs_fini(world);
@@ -130,9 +134,9 @@ void SystemOnRemove_remove_match_2_of_3() {
     test_null(ctx.param);
 
     test_int(ctx.e[0], e);
-    test_int(ctx.c[0][0], ecs_to_entity(Position));
+    test_int(ctx.c[0][0], ecs_entity(Position));
     test_int(ctx.s[0][0], 0);
-    test_int(ctx.c[0][1], ecs_to_entity(Velocity));
+    test_int(ctx.c[0][1], ecs_entity(Velocity));
     test_int(ctx.s[0][1], 0);
 
     ecs_fini(world);
@@ -229,7 +233,7 @@ void SystemOnRemove_delete_match_1_of_1() {
     test_null(ctx.param);
 
     test_int(ctx.e[0], e);
-    test_int(ctx.c[0][0], ecs_to_entity(Position));
+    test_int(ctx.c[0][0], ecs_entity(Position));
     test_int(ctx.s[0][0], 0);
 
     ecs_fini(world);
@@ -258,7 +262,7 @@ void SystemOnRemove_delete_match_1_of_2() {
     test_null(ctx.param);
 
     test_int(ctx.e[0], e);
-    test_int(ctx.c[0][0], ecs_to_entity(Position));
+    test_int(ctx.c[0][0], ecs_entity(Position));
     test_int(ctx.s[0][0], 0);
 
     ecs_fini(world);
@@ -287,9 +291,9 @@ void SystemOnRemove_delete_match_2_of_2() {
     test_null(ctx.param);
 
     test_int(ctx.e[0], e);
-    test_int(ctx.c[0][0], ecs_to_entity(Position));
+    test_int(ctx.c[0][0], ecs_entity(Position));
     test_int(ctx.s[0][0], 0);
-    test_int(ctx.c[0][1], ecs_to_entity(Velocity));
+    test_int(ctx.c[0][1], ecs_entity(Velocity));
     test_int(ctx.s[0][1], 0);    
 
     ecs_fini(world);
@@ -319,9 +323,9 @@ void SystemOnRemove_delete_match_2_of_3() {
     test_null(ctx.param);
 
     test_int(ctx.e[0], e);
-    test_int(ctx.c[0][0], ecs_to_entity(Position));
+    test_int(ctx.c[0][0], ecs_entity(Position));
     test_int(ctx.s[0][0], 0);
-    test_int(ctx.c[0][1], ecs_to_entity(Velocity));
+    test_int(ctx.c[0][1], ecs_entity(Velocity));
     test_int(ctx.s[0][1], 0);
 
     ecs_fini(world);
@@ -392,6 +396,36 @@ void SystemOnRemove_delete_no_match_2_of_3() {
     ecs_delete(world, e);
 
     test_int(ctx.count, 0); 
+
+    ecs_fini(world);
+}
+
+static int is_invoked;
+
+static
+void IsInvoked(ecs_rows_t *rows) {
+    is_invoked ++;
+}
+
+void SystemOnRemove_disabled_system() {
+    ecs_world_t *world = ecs_init();
+
+    ECS_COMPONENT(world, Position);
+    ECS_SYSTEM(world, IsInvoked, EcsOnRemove, Position);
+
+    ecs_enable(world, IsInvoked, false);
+
+    SysTestData ctx = {0};
+    ecs_set_context(world, &ctx);
+
+    ecs_entity_t e = ecs_new(world, Position);
+    test_assert(e != 0);
+    test_assert( ecs_has(world, e, Position));
+
+    ecs_remove(world, e, Position);
+    test_assert( !ecs_has(world, e, Position));
+
+    test_int(is_invoked, 0);
 
     ecs_fini(world);
 }
